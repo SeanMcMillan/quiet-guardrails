@@ -56,17 +56,22 @@ cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || t
 # and segment-leader checks use $scan; the raw $cmd is kept for content checks.
 scan="$(printf '%s' "$cmd" | sed "s/'[^']*'//g; s/\"[^\"]*\"//g")"
 
+# Dequoted view for the git safety gates: strip quote CHARACTERS but keep their
+# contents, so `git "push"` / `git p"u"sh` can't hide a mutating subcommand from a
+# gate the way $scan (which deletes whole quoted spans) would.
+dequoted="$(printf '%s' "$cmd" | tr -d "\"'")"
+
 # Rule 8 — SAFETY gate, checked BEFORE the #override escape so it can't be waved
 # through. A mutating `git branch` (force/delete/rename/copy): Claude Code
 # classifies ALL of `git branch …` as read-only, so `git branch -f/-d/-D/-m/-M/-c/-C`
 # auto-approves and can force-move or delete a branch with NO prompt. Force a human
 # confirmation via permissionDecision:ask (overrides the read-only auto-approve).
-if printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])git([[:space:]]+[^;|&[:space:]]+)*[[:space:]]+branch([[:space:]]|$)'; then
+if printf '%s' "$dequoted" | grep -Eq '(^|[^[:alnum:]_])git([[:space:]]+[^;|&[:space:]]+)*[[:space:]]+branch([[:space:]]|$)'; then
   # Check for a mutating flag only in the args AFTER 'branch', so a global
   # 'git -C <path>' / 'git -c k=v' BEFORE the subcommand is not misread as a
   # 'branch -C/-c' copy. That false match would send 'git -C … branch --list'
   # (read-only) into this ASK gate instead of on to the git -C corrector (Rule 9).
-  branchargs="$(printf '%s' "$scan" | sed 's/^.*[[:space:]]branch//')"
+  branchargs="$(printf '%s' "$dequoted" | sed 's/^.*[[:space:]]branch//')"
   if printf '%s' "$branchargs" | grep -Eq '(^|[[:space:]])(-[a-zA-Z]*[dDfmMcC][a-zA-Z]*|--force|--delete|--move|--copy|--force-with-lease)([[:space:]]|=|$)'; then
     printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"git branch with a mutating flag (-f/-d/-D/-m/-M/-c/-C or --force/--delete/--move) force-moves, deletes, renames, or copies a branch. Claude Code auto-approves it because git branch is read-only-classified, so this hook forces a confirmation."}}'
     exit 0
@@ -79,7 +84,7 @@ fi
 # Code read-only-misclassifies some of these so they auto-approve. Force a
 # confirmation. Flag-agnostic, token-bounded to the subcommand position so an arg
 # that merely contains the word does not trip it.
-if printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])git([[:space:]]+[^;|&[:space:]]+)*[[:space:]]+(add|reset|restore|rm|stash|checkout|switch|clean|commit|push)([[:space:]]|$)'; then
+if printf '%s' "$dequoted" | grep -Eq '(^|[^[:alnum:]_])git([[:space:]]+[^;|&[:space:]]+)*[[:space:]]+(add|reset|restore|rm|stash|checkout|switch|clean|commit|push)([[:space:]]|$)'; then
   printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"This git subcommand mutates the index, working tree, or history (add/reset/restore/rm/stash/checkout/switch/clean/commit/push) — which you manage yourself. Claude Code auto-approves some of these as read-only, so this hook forces a confirmation."}}'
   exit 0
 fi
@@ -87,10 +92,12 @@ fi
 # Escape hatch for the OVERREACH rules below: put  #override  anywhere to skip
 # them (deliberate last resort — not advertised in the messages). Does NOT skip
 # the git safety gates above (branch + index/worktree/history). Each use is logged.
-case "$cmd" in
+# Matched against $scan so a quoted "#override" in data (a filename, a grep pattern)
+# can't disable the rules — only a real unquoted trailing marker counts.
+case "$scan" in
   *'#override'*)
     printf '%s\t%s\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$PWD" "$cmd" \
-      >> "$HOME/.claude/hooks/override-escapes.log" 2>/dev/null
+      2>/dev/null >> "$HOME/.claude/hooks/override-escapes.log"
     exit 0
     ;;
 esac
@@ -238,7 +245,7 @@ fi
 # that writes a file. A blind regex mutation that also prompts (arbitrary code /
 # file write). Read-only forms — `sed 's/…/…/' file` (prints), `node -e` that
 # only computes/prints — have no in-place flag or write call and pass.
-if { printf '%s\n' "$leaders" | grep -qxE 'sed|perl' && printf '%s' "$cmd" | grep -Eq '(^|[[:space:]])(-i|--in-place)([[:space:]=.]|$)'; } \
+if { printf '%s\n' "$leaders" | grep -qxE 'sed|perl' && printf '%s' "$cmd" | grep -Eq '(^|[[:space:]])(-[a-zA-Z]*i|--in-place)([[:space:]=.'\'']|$)'; } \
    || { printf '%s\n' "$leaders" | grep -qxE 'node|python|python3|perl' \
         && printf '%s' "$cmd" | grep -Eq '(-e|-c|--eval|--exec)([[:space:]]|$)' \
         && printf '%s' "$cmd" | grep -Eq 'writeFileSync|writeFile|appendFileSync|appendFile|fs\.write|\.write\(|writelines|write_text'; }; then
