@@ -71,6 +71,26 @@ The hook shrinks how big your allowlist needs to be (it corrects shapes instead 
 4. **Wildcards cross spaces but not `/`** in Claude Code's matcher; a trailing `:*` is legacy *prefix* matching (which turns an earlier `*` literal). Pin host/port literals in URL rules (`http://localhost:3000*`, not `http://localhost:*`) so look-alike hosts don't match.
 5. **Skills can re-open doors.** A skill's `allowed-tools` frontmatter is an *additive grant* — a blanket like `Bash(some-cli:*)` auto-approves every subcommand of that CLI while the skill runs, overriding your settings. Audit skill frontmatter, not just settings.
 
+## FAQ
+
+**Why this instead of the built-in `fewer-permission-prompts` skill?**
+
+They attack the same annoyance from opposite ends, and they compose — this isn't a replacement.
+
+`fewer-permission-prompts` scans your transcripts and *grows your allowlist* to match the commands the model already runs. It's official, zero-setup, and a great way to seed a starter allowlist from real usage.
+
+quiet-guardrails goes the other way: instead of widening the allowlist to fit the model's habits, it *fixes the habits* so a small allowlist suffices. When the model reaches for `cmd 2>&1 | tail`, `cd repo && git status`, or `npx jest`, the guard rewrites it to the plain form your allowlist already trusts. Three things follow:
+
+- **It handles the compounds allowlisting can't.** Most prompt fatigue comes from *instrumented* commands — pipes, `&&` chains, `2>&1`, `| wc`. A compound auto-approves only if *every* part is listed, and you don't want to allowlist arbitrary pipes. quiet-guardrails dissolves them into their allowlistable parts instead of trying to list them.
+- **It adds friction, not just removes it.** `fewer-permission-prompts` is purely additive — it only ever makes *more* things auto-approve. quiet-guardrails also *forces* a prompt on `git add` / `reset` / `branch -D` — index and history mutations Claude Code silently auto-approves. A list-only tool structurally can't add that.
+- **Your allowlist stays small and the model improves.** Corrected at the source, you maintain fewer entries, and the bad shapes stop appearing over a session instead of accumulating as new allow rules.
+
+**Use both:** seed the allowlist with `fewer-permission-prompts` from real usage, then let quiet-guardrails correct habits and add the safety gates. Each makes the other's job smaller.
+
+**Why not just use auto mode?**
+
+Auto mode hands each decision to an LLM classifier — probabilistic and per-call. quiet-guardrails keeps a deterministic allowlist *you* control and never auto-approves anything you didn't list; it cuts prompts by fixing the model's commands, not by trusting a judge to wave them through. The intro has the fuller contrast.
+
 ## Caveats
 
 - **It's opinionated and tuned to a specific setup** (see the ENVIRONMENT ASSUMPTIONS block at the top of the hook): a native Claude Code build where `grep` is ugrep and there are no Grep/Glob tools, and npm projects for the `npm run` rule. On other builds some corrections flip (e.g. bare grep/find would steer to Grep/Glob tools). Read the rules before adopting; they're plain shell and easy to trim.
