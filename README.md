@@ -16,7 +16,7 @@ A few principles fall out of that:
 
 - **Sanity > prompts > tokens.** Pick the correct, reviewable command first; avoid a needless prompt second; save keystrokes/tokens last. The recurring failure is inverting it — a "clever" one-liner that saves a token but prompts and mutates blind.
 - **A block should mean "rewrite," not "bypass."** So the escape hatch (below) is *never mentioned in a rule's message*. When you're blocked, the only thing on screen is how to do it right — reaching for the override is a conscious act, not the reflex.
-- **Force the prompts that should exist.** Claude Code read-only-*misclassifies* some git subcommands — `git add`, `git reset`, `git branch -D`, `git commit`, `git push` — so they auto-approve with no prompt. The guard overrides that and forces a confirmation. The index and your uncommitted work are yours.
+- **Force the prompts that should exist.** Claude Code read-only-*misclassifies* some git subcommands — `git add`, `git reset`, `git branch -D` — so they auto-approve with no prompt. The guard overrides that and forces a confirmation. The index and your uncommitted work are yours.
 - **Success is silent, so measure it.** Every use of the escape hatch is appended to a log, so "no prompts" can't quietly hide overuse.
 
 ## What it does
@@ -25,9 +25,9 @@ A few principles fall out of that:
 
 | Shape | Correction |
 |---|---|
-| `grep`/`find` piped or in `$(...)` | run the search bare, act on the result in a separate call (`… | wc -l` counts are exempt) |
+| `grep`/`find` piped or in `$(...)` | run the search bare, act on the result in a separate call (`… \| wc -l` counts are exempt) |
 | `cat`, leading `head`/`tail` on a file | use the Read tool |
-| `cmd | tail`, `cmd 2>&1`, `echo $?`, `cmd > /tmp/…` | run it bare — the harness returns full stdout/stderr + exit status |
+| `cmd \| tail`, `cmd 2>&1`, `echo $?`, `cmd > /tmp/…` | run it bare — the harness returns full stdout/stderr + exit status |
 | `for`/`while` loop | separate/parallel tool calls |
 | `cd repo && git …` | standalone `cd`, then plain git |
 | `git -C <path> …` | plain git (or standalone `cd`) |
@@ -51,7 +51,6 @@ A few principles fall out of that:
    chmod +x ~/.claude/hooks/guard-bash-overreach.sh
    ```
 2. Wire it into Claude Code settings (`~/.claude/settings.json` for all projects, or a project's `.claude/settings.local.json`). Merge the `hooks` block and the starter `allow` list from [`settings.example.json`](settings.example.json).
-3. Requires `jq` on your PATH.
 
 The hook is re-read on every Bash call, so edits take effect immediately. The allowlist is read at session start — reload settings (or restart) after editing it.
 

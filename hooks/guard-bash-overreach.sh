@@ -18,7 +18,7 @@
 #     Grep/Glob tools, you'd instead steer bare grep/find to those tools.
 #   - An npm/`package.json` project for Rule 10 (raw-tool -> `npm run <script>`).
 #     Harmless in non-npm repos (it only fires when a wrapping script exists).
-#   - `jq` on PATH (used to parse the hook payload). Required.
+#   - `jq` (used to parse the hook payload) — ships with Claude Code, nothing to install.
 #
 # THE ESCAPE HATCH. Put the marker  #override  anywhere in a command to skip the
 # OVERREACH checks (NOT the safety gates). It is deliberately NOT mentioned in any
