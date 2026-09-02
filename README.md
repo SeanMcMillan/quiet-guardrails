@@ -87,6 +87,19 @@ quiet-guardrails goes the other way: instead of widening the allowlist to fit th
 
 **Use both:** seed the allowlist with `fewer-permission-prompts` from real usage, then let quiet-guardrails correct habits and add the safety gates. Each makes the other's job smaller.
 
+**Why a hook and not a rule, skill, or `CLAUDE.md` instruction?**
+
+Because those are advice the model can ignore — and reliably does, at exactly the wrong moment.
+
+A rule or skill loads into context and *asks* the model to comply ("run searches bare, don't pipe into `wc`"). That holds right up until the model is heads-down mid-task and reaches for the shell habit anyway — the instruction is present, it just doesn't fire when the command is composed. A PreToolUse hook fires *deterministically, on every command*, remembered or not, and hands back a specific correction at the instant it's needed, so the model rewrites and retries.
+
+Two things make it non-negotiable rather than nice-to-have:
+
+- **This tool exists because the advisory version didn't stick.** The bad shapes kept recurring despite being written down; the `exit 2` feedback *at the command* is what actually changed behavior. You can't teach a habit with a doc the model skims once a session.
+- **A guardrail has to be un-ignorable to be a guardrail.** "Force a confirmation on `git add`" as a *rule* is worthless — the model can just not. As a hook returning `permissionDecision: ask`, the harness enforces it. You can't build a safety gate out of a suggestion.
+
+This isn't "hooks beat rules" — rules and skills are the right tool for *judgment* a regex can't capture (taste, architecture, "is this proportionate?"). The split: deterministic, mechanical command shapes go in the hook; genuine judgment stays in your instructions.
+
 **Why not just use auto mode?**
 
 Auto mode hands each decision to an LLM classifier — probabilistic and per-call. quiet-guardrails keeps a deterministic allowlist *you* control and never auto-approves anything you didn't list; it cuts prompts by fixing the model's commands, not by trusting a judge to wave them through. The intro has the fuller contrast.
