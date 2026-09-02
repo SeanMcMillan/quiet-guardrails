@@ -1,4 +1,6 @@
-# claude-overreach-guard
+# quiet-guardrails
+
+**manual mode, minus the nagging** — deterministic guardrails that quiet the safe prompts in Claude Code and keep you in control.
 
 A single PreToolUse hook + a curated allowlist that make Claude Code **stop asking about safe work and start self-correcting its own bad habits** — while still forcing a confirmation on the few things that genuinely deserve one.
 
@@ -38,7 +40,7 @@ A few principles fall out of that:
 - Mutating `git branch` (`-f`/`-d`/`-D`/`-m`/`-c`), which CC auto-approves.
 - Any index/worktree/history mutation: `add reset restore rm stash checkout switch clean commit push`.
 
-**The escape hatch:** put `#pipeline` anywhere in a command to skip the *overreach* rules (never the safety gates). Use it for the rare genuinely-necessary pipeline. Every use is logged to `~/.claude/hooks/pipeline-escapes.log`.
+**The escape hatch:** put `#override` anywhere in a command to skip the *overreach* rules (never the safety gates). Use it for the rare genuinely-necessary pipeline. Every use is logged to `~/.claude/hooks/override-escapes.log`.
 
 ## Install
 
@@ -71,4 +73,4 @@ The hook shrinks how big your allowlist needs to be (it corrects shapes instead 
 
 ## License
 
-[0BSD](LICENSE) — public-domain-equivalent, no attribution required. Take it and do whatever you want with it.
+[0BSD](LICENSE) (SPDX: `0BSD`; [OSI-approved](https://opensource.org/license/0bsd)) — public-domain-equivalent, no attribution required. Take it and do whatever you want with it.

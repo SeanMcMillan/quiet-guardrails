@@ -20,7 +20,7 @@
 #     Harmless in non-npm repos (it only fires when a wrapping script exists).
 #   - `jq` on PATH (used to parse the hook payload). Required.
 #
-# THE ESCAPE HATCH. Put the marker  #pipeline  anywhere in a command to skip the
+# THE ESCAPE HATCH. Put the marker  #override  anywhere in a command to skip the
 # OVERREACH checks (NOT the safety gates). It is deliberately NOT mentioned in any
 # rule message — so a block nudges you to rewrite, and reaching for the escape is a
 # conscious choice, not the reflexive way past. Every use is logged (see below) so
@@ -56,7 +56,7 @@ cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || t
 # and segment-leader checks use $scan; the raw $cmd is kept for content checks.
 scan="$(printf '%s' "$cmd" | sed "s/'[^']*'//g; s/\"[^\"]*\"//g")"
 
-# Rule 8 — SAFETY gate, checked BEFORE the #pipeline escape so it can't be waved
+# Rule 8 — SAFETY gate, checked BEFORE the #override escape so it can't be waved
 # through. A mutating `git branch` (force/delete/rename/copy): Claude Code
 # classifies ALL of `git branch …` as read-only, so `git branch -f/-d/-D/-m/-M/-c/-C`
 # auto-approves and can force-move or delete a branch with NO prompt. Force a human
@@ -73,7 +73,7 @@ if printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])git([[:space:]]+[^;|&[:space
   fi
 fi
 
-# Rule 8b — SAFETY gate (before the escape, so it can't be #pipeline'd past): git
+# Rule 8b — SAFETY gate (before the escape, so it can't be #override'd past): git
 # subcommands that mutate the index, working tree, or history — which you manage
 # yourself (the index and any uncommitted work are yours to stage/commit). Claude
 # Code read-only-misclassifies some of these so they auto-approve. Force a
@@ -84,13 +84,13 @@ if printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])git([[:space:]]+[^;|&[:space
   exit 0
 fi
 
-# Escape hatch for the OVERREACH rules below: put  #pipeline  anywhere to skip
+# Escape hatch for the OVERREACH rules below: put  #override  anywhere to skip
 # them (deliberate last resort — not advertised in the messages). Does NOT skip
 # the git safety gates above (branch + index/worktree/history). Each use is logged.
 case "$cmd" in
-  *'#pipeline'*)
+  *'#override'*)
     printf '%s\t%s\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$PWD" "$cmd" \
-      >> "$HOME/.claude/hooks/pipeline-escapes.log" 2>/dev/null
+      >> "$HOME/.claude/hooks/override-escapes.log" 2>/dev/null
     exit 0
     ;;
 esac
@@ -148,7 +148,7 @@ esac
 # instruments an otherwise-bare (often allowlisted) command into a prompting
 # compound. Run it bare and read the result.
 if printf '%s\n' "$leaders" | grep -qxE 'head|tail' && printf '%s' "$scan" | grep -Eq '[|]'; then
-  echo "Overreach: capping piped output with head/tail ('cmd | tail -N'). The harness already returns each command's full stdout/stderr AND exit status — run the command bare and read the result, don't pipe through head/tail. A genuinely huge run you've deliberately chosen to filter is the #pipeline case." >&2
+  echo "Overreach: capping piped output with head/tail ('cmd | tail -N'). The harness already returns each command's full stdout/stderr AND exit status — run the command bare and read the result, don't pipe through head/tail. A genuinely huge run you've deliberately chosen to filter is the #override case." >&2
   exit 2
 fi
 
