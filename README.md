@@ -50,9 +50,16 @@ A few principles fall out of that:
    cp hooks/guard-bash-overreach.sh ~/.claude/hooks/
    chmod +x ~/.claude/hooks/guard-bash-overreach.sh
    ```
-2. Wire it into Claude Code settings (`~/.claude/settings.json` for all projects, or a project's `.claude/settings.local.json`). Merge the `hooks` block and the starter `allow` list from [`settings.example.json`](settings.example.json).
+2. Wire it into Claude Code settings (`~/.claude/settings.json` for all projects, or a project's `.claude/settings.local.json`). Merge the `hooks` block, the starter `allow` list, and the `defaultMode` from [`settings.example.json`](settings.example.json).
+3. Verify it's wired — feed the hook a command that trips a rule and watch it correct you (run this in your own terminal):
+   ```bash
+   jq -nc --arg c 'cat somefile' '{tool_input:{command:$c}}' | bash ~/.claude/hooks/guard-bash-overreach.sh
+   ```
+   You should see `Overreach: 'cat' in a Bash call. Read files with the Read tool…` on stderr. Silence means the hook didn't run — check the path.
 
-The hook is re-read on every Bash call, so edits take effect immediately. The allowlist is read at session start — reload settings (or restart) after editing it.
+The sample sets **`defaultMode: acceptEdits`** — auto-accept in-project file edits (Edit/Write) while every Bash command stays under the guard and allowlist. That's the sweet spot this is built for: manual control over what *runs*, no friction on what you *write*. Use `default` (manual) if you want edits to prompt too — but not `auto`/`bypassPermissions`, which hand back the oversight this exists to keep.
+
+The hook is re-read on every Bash call, so edits take effect immediately. The allowlist and `defaultMode` are read at session start — reload settings (or restart) after editing them.
 
 ## Growing your allowlist
 
@@ -67,9 +74,14 @@ The hook shrinks how big your allowlist needs to be (it corrects shapes instead 
 ## Caveats
 
 - **It's opinionated and tuned to a specific setup** (see the ENVIRONMENT ASSUMPTIONS block at the top of the hook): a native Claude Code build where `grep` is ugrep and there are no Grep/Glob tools, and npm projects for the `npm run` rule. On other builds some corrections flip (e.g. bare grep/find would steer to Grep/Glob tools). Read the rules before adopting; they're plain shell and easy to trim.
+- **Calibrated to observed Claude Code behavior (developed against 2.1.x).** The rules encode current CC quirks — which git subcommands it mis-classifies as read-only, how its allowlist matcher treats `*` and `:*`. Anthropic can change these between versions: if they fix a misclassification a safety gate just goes redundant (harmless), and the allowlist-matcher notes may need re-checking. Re-verify against your build.
 - The git safety gates assume *you* drive staging/commits/pushes. If you want an agent to commit unattended, drop `commit`/`push` from Rule 8b.
 - These are heuristics on command *strings*, not a sandbox. They reduce prompts and teach better habits; they are not a security boundary.
 
 ## License
 
 [0BSD](LICENSE) (SPDX: `0BSD`; [OSI-approved](https://opensource.org/license/0bsd)) — public-domain-equivalent, no attribution required. Take it and do whatever you want with it.
+
+---
+
+Built with Claude Code, and largely written by Claude — which is part of why it's 0BSD.
