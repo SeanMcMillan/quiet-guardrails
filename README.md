@@ -6,6 +6,8 @@ A single PreToolUse hook + a curated allowlist that make Claude Code **stop aski
 
 It's a deliberate alternative to auto mode. Where auto mode asks an LLM classifier to judge each action (probabilistic, opaque, per-call), this takes the opposite bet: **make the model's default behavior correct and frictionless, deterministically**, and keep *you* in control of exactly what runs unattended.
 
+> **What it is — and isn't.** This *corrects a cooperative model's habits* (to cut prompts) and *forces a confirmation on a few risky git ops Claude Code waves through*. It is **not** a security boundary and does **not** defend against an adversarial or prompt-injected agent — a determined one can slip any string heuristic. It works **alongside** Claude Code's own allowlist and sandbox, not as a replacement for either: the sandbox is your wall against a hostile process; this is habit-correction for a well-behaved one.
+
 ## The idea
 
 Most Claude Code prompt fatigue isn't from dangerous commands — it's from safe ones dressed in shell habits: a `grep` piped into `wc`, a `cmd 2>&1 | tail`, a `cd repo && git status`, an `npx jest` instead of `npm test`. Each is harmless, none matches an allowlist, so each prompts. People get tired of approving them and flip on a blanket "just allow everything" mode — trading away all oversight to escape the noise.
@@ -71,6 +73,10 @@ The hook shrinks how big your allowlist needs to be (it corrects shapes instead 
 4. **Wildcards cross spaces but not `/`** in Claude Code's matcher; a trailing `:*` is legacy *prefix* matching (which turns an earlier `*` literal). Pin host/port literals in URL rules (`http://localhost:3000*`, not `http://localhost:*`) so look-alike hosts don't match.
 5. **Skills can re-open doors.** A skill's `allowed-tools` frontmatter is an *additive grant* — a blanket like `Bash(some-cli:*)` auto-approves every subcommand of that CLI while the skill runs, overriding your settings. Audit skill frontmatter, not just settings.
 
+## Tests
+
+`bash tests/run.sh` feeds fake tool payloads to the hook and asserts each outcome (block / gate / allow) across every rule, with explicit regression cases for the tricky ones (quoted git subcommands, the `#override` marker appearing in data, combined `sed` flags). It runs under an isolated `$HOME`, needs no setup, and exits non-zero on any failure — CI-ready. Add a case whenever you add or change a rule.
+
 ## FAQ
 
 **Why this instead of the built-in `fewer-permission-prompts` skill?**
@@ -81,9 +87,9 @@ They attack the same annoyance from opposite ends, and they compose — this isn
 
 quiet-guardrails goes the other way: instead of widening the allowlist to fit the model's habits, it *fixes the habits* so a small allowlist suffices. When the model reaches for `cmd 2>&1 | tail`, `cd repo && git status`, or `npx jest`, the guard rewrites it to the plain form your allowlist already trusts. Three things follow:
 
-- **It handles the compounds allowlisting can't.** Most prompt fatigue comes from *instrumented* commands — pipes, `&&` chains, `2>&1`, `| wc`. A compound auto-approves only if *every* part is listed, and you don't want to allowlist arbitrary pipes. quiet-guardrails dissolves them into their allowlistable parts instead of trying to list them.
+- **The allowlist grows to match mess; the guard removes the mess.** An uncorrected model, over a week, runs `npx jest`, `jest --silent`, `npm test 2>&1 | tail`, `npm test -- --findRelatedTests x`, and `cd frontend && npm test` — five shapes for "run the tests," each its own allowlist decision, and some (the `2>&1 | tail`, the `&&`) things you shouldn't bless at all. Corrected, they collapse to `npm test` and `npm test -- <args>` — two entries. `fewer-permission-prompts` grows the list to fit the variety; the guard shrinks the variety.
 - **It adds friction, not just removes it.** `fewer-permission-prompts` is purely additive — it only ever makes *more* things auto-approve. quiet-guardrails also *forces* a prompt on `git add` / `reset` / `branch -D` — index and history mutations Claude Code silently auto-approves. A list-only tool structurally can't add that.
-- **Your allowlist stays small and the model improves.** Corrected at the source, you maintain fewer entries, and the bad shapes stop appearing over a session instead of accumulating as new allow rules.
+- **And the model actually learns.** Because the correction lands *at the command*, the bad shapes taper off over the session — you're training the habit, not just filtering the output. An allowlist never does that; it only accumulates.
 
 **Use both:** seed the allowlist with `fewer-permission-prompts` from real usage, then let quiet-guardrails correct habits and add the safety gates. Each makes the other's job smaller.
 
@@ -109,7 +115,7 @@ Auto mode hands each decision to an LLM classifier — probabilistic and per-cal
 - **It's opinionated and tuned to a specific setup** (see the ENVIRONMENT ASSUMPTIONS block at the top of the hook): a native Claude Code build where `grep` is ugrep and there are no Grep/Glob tools, and npm projects for the `npm run` rule. On other builds some corrections flip (e.g. bare grep/find would steer to Grep/Glob tools). Read the rules before adopting; they're plain shell and easy to trim.
 - **Calibrated to observed Claude Code behavior (developed against 2.1.x).** The rules encode current CC quirks — which git subcommands it mis-classifies as read-only, how its allowlist matcher treats `*` and `:*`. Anthropic can change these between versions: if they fix a misclassification a safety gate just goes redundant (harmless), and the allowlist-matcher notes may need re-checking. Re-verify against your build.
 - The git safety gates assume *you* drive staging/commits/pushes. If you want an agent to commit unattended, drop `commit`/`push` from Rule 8b.
-- These are heuristics on command *strings*, not a sandbox. They reduce prompts and teach better habits; they are not a security boundary.
+- **Not a security boundary.** These are heuristics on command *strings*: they reduce prompts and teach a *cooperative* model better habits, but a determined or prompt-injected agent can defeat them — `git config core.hooksPath …` isn't in the git gate, command substitution (`git $(printf push)`) sidesteps the dequote, and a `package.json` script name reaches a correction message verbatim. Closing every such hole would turn a readable script into an unwinnable arms race, so it's out of scope by design. The guard also **fails open** — a parse hiccup skips the rules rather than blocking your shell, which is right for a habit tool and wrong for a boundary. If you need a real boundary, use the sandbox.
 
 ## License
 
