@@ -96,7 +96,10 @@ fi
 # can't disable the rules — only a real unquoted trailing marker counts.
 case "$scan" in
   *'#override'*)
-    printf '%s\t%s\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$PWD" "$cmd" \
+    # Sanitize tabs/newlines out of the logged command so a crafted argument
+    # can't forge extra rows in the TSV log.
+    logcmd="$(printf '%s' "$cmd" | tr '\t\n' '  ')"
+    printf '%s\t%s\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$PWD" "$logcmd" \
       2>/dev/null >> "$HOME/.claude/hooks/override-escapes.log"
     exit 0
     ;;

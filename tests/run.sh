@@ -14,6 +14,7 @@
 GUARD="${1:-$(cd "$(dirname "$0")/.." && pwd)/hooks/guard-bash-overreach.sh}"
 export HOME="$(mktemp -d)"
 trap 'rm -rf "$HOME"' EXIT
+mkdir -p "$HOME/.claude/hooks"   # let escape-log writes land where we can inspect them
 pass=0 fail=0
 
 run() { # $1 = command; sets $out $err $code
@@ -77,6 +78,13 @@ expect_allow 'git branch --list'
 expect_allow 'grep -rn foo src'
 expect_allow 'grep -c foo src | wc -l'         # grep|wc count exemption
 expect_allow 'ls -la'
+
+echo "== escape log sanitization =="
+LOG="$HOME/.claude/hooks/override-escapes.log"
+: > "$LOG"
+run "$(printf 'grep x . #override\nEVIL-forged-row')"
+rows="$(wc -l < "$LOG" | tr -d ' ')"
+if [ "$rows" = "1" ]; then ok; else bad "log sanitize (no forged rows)" "want 1 log row, got $rows"; fi
 
 echo
 printf '%d passed, %d failed\n' "$pass" "$fail"
