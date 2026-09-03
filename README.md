@@ -37,12 +37,14 @@ A few principles fall out of that:
 | `sed -i`, `node -e … writeFile` | the Edit/Write tool |
 | `python`/`node` parsing JSON | `jq` |
 
-**Forces a confirmation (`permissionDecision: ask`):**
+**Forces a confirmation (`permissionDecision: ask`) — the *workflow* gates:**
+
+The default rules for Claude Code auto-approve some git ops (most notably, `git add`.) The guard forces the confirmation you'd want. Same purpose as the corrections above (your workflow, made deterministic), pointed the other way: those *remove* an unwanted prompt, these *add* a wanted one.
 
 - Mutating `git branch` (`-f`/`-d`/`-D`/`-m`/`-c`), which CC auto-approves.
 - Any index/worktree/history mutation: `add reset restore rm stash checkout switch clean commit push`.
 
-**The escape hatch:** put `#override` anywhere in a command to skip the *overreach* rules (never the safety gates). Use it for the rare genuinely-necessary pipeline. Every use is logged to `~/.claude/hooks/override-escapes.log`.
+**The escape hatch:** put `#override` anywhere in a command to skip the *overreach* rules (never the workflow gates). Use it for the rare genuinely-necessary pipeline. Every use is logged to `~/.claude/hooks/override-escapes.log`.
 
 ## Install
 
@@ -91,7 +93,7 @@ quiet-guardrails goes the other way: instead of widening the allowlist to fit th
 - **It adds friction, not just removes it.** `fewer-permission-prompts` is purely additive — it only ever makes *more* things auto-approve. quiet-guardrails also *forces* a prompt on `git add` / `reset` / `branch -D` — index and history mutations Claude Code silently auto-approves. A list-only tool structurally can't add that.
 - **And the model actually learns.** Because the correction lands *at the command*, the bad shapes taper off over the session — you're training the habit, not just filtering the output. An allowlist never does that; it only accumulates.
 
-**Use both:** seed the allowlist with `fewer-permission-prompts` from real usage, then let quiet-guardrails correct habits and add the safety gates. Each makes the other's job smaller.
+**Use both:** seed the allowlist with `fewer-permission-prompts` from real usage, then let quiet-guardrails correct habits and add the workflow gates. Each makes the other's job smaller.
 
 **Why a hook and not a rule, skill, or `CLAUDE.md` instruction?**
 
@@ -102,7 +104,7 @@ A rule or skill loads into context and *asks* the model to comply ("run searches
 Two things make it non-negotiable rather than nice-to-have:
 
 - **This tool exists because the advisory version didn't stick.** The bad shapes kept recurring despite being written down; the `exit 2` feedback *at the command* is what actually changed behavior. You can't teach a habit with a doc the model skims once a session.
-- **A guardrail has to be un-ignorable to be a guardrail.** "Force a confirmation on `git add`" as a *rule* is worthless — the model can just not. As a hook returning `permissionDecision: ask`, the harness enforces it. You can't build a safety gate out of a suggestion.
+- **A guardrail has to be un-ignorable to be a guardrail.** "Force a confirmation on `git add`" as a *rule* is worthless — the model can just not. As a hook returning `permissionDecision: ask`, the harness enforces it. You can't build an enforced gate out of a suggestion.
 
 This isn't "hooks beat rules" — rules and skills are the right tool for *judgment* a regex can't capture (taste, architecture, "is this proportionate?"). The split: deterministic, mechanical command shapes go in the hook; genuine judgment stays in your instructions.
 
@@ -113,8 +115,8 @@ Auto mode hands each decision to an LLM classifier — probabilistic and per-cal
 ## Caveats
 
 - **It's opinionated and tuned to a specific setup** (see the ENVIRONMENT ASSUMPTIONS block at the top of the hook): a native Claude Code build where `grep` is ugrep and there are no Grep/Glob tools, and npm projects for the `npm run` rule. On other builds some corrections flip (e.g. bare grep/find would steer to Grep/Glob tools). Read the rules before adopting; they're plain shell and easy to trim.
-- **Calibrated to observed Claude Code behavior (developed against 2.1.x).** The rules encode current CC quirks — which git subcommands it mis-classifies as read-only, how its allowlist matcher treats `*` and `:*`. Anthropic can change these between versions: if they fix a misclassification a safety gate just goes redundant (harmless), and the allowlist-matcher notes may need re-checking. Re-verify against your build.
-- The git safety gates assume *you* drive staging/commits/pushes. If you want an agent to commit unattended, drop `commit`/`push` from Rule 8b.
+- **Calibrated to observed Claude Code behavior (developed against 2.1.x).** The rules encode current CC quirks — which git subcommands it mis-classifies as read-only, how its allowlist matcher treats `*` and `:*`. Anthropic can change these between versions: if they fix a misclassification a workflow gate just goes redundant (harmless), and the allowlist-matcher notes may need re-checking. Re-verify against your build.
+- The git workflow gates assume *you* drive staging/commits/pushes. If you want an agent to commit unattended, drop `commit`/`push` from Rule 8b.
 - **Not a security boundary.** It corrects a *cooperative* model; a determined or prompt-injected one can defeat string heuristics, and it deliberately **fails open**. See **[KNOWN-LIMITATIONS.md](KNOWN-LIMITATIONS.md)** for the specifics and why they're out of scope. If you need a real boundary, use the sandbox.
 
 ## License

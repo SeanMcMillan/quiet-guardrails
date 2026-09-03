@@ -5,7 +5,7 @@
 #
 # Feeds fake tool payloads to the guard and checks each outcome:
 #   block  — exit 2 (overreach self-correction); stderr must contain a substring
-#   gate   — exit 0 with a permissionDecision:"ask" JSON on stdout (safety gate)
+#   gate   — exit 0 with a permissionDecision:"ask" JSON on stdout (workflow gate)
 #   allow  — exit 0, no stdout, no stderr (command passes, or an #override escape)
 #
 # Requires jq (ships with Claude Code). Runs under an isolated $HOME so the
@@ -57,7 +57,7 @@ expect_block 'sed -i "s/a/b/" f'               'shell interpreter'
 expect_block 'sed -Ei "s/a/b/" f'              'shell interpreter'   # combined-flag fix (#6)
 expect_block 'perl -pi -e "s/a/b/" f'          'shell interpreter'   # perl -pi fix (#6)
 
-echo "== safety gates (force a prompt, exit 0 + ask) =="
+echo "== workflow gates (force a prompt, exit 0 + ask) =="
 expect_gate 'git add .'
 expect_gate 'git commit -m "wip"'
 expect_gate 'git push origin main'
@@ -69,7 +69,7 @@ expect_gate 'git p"u"sh'                        # split-quote fix (#1)
 echo "== escape hatch (#override) =="
 expect_allow 'cat notes.md #override'                    # real trailing marker bypasses overreach
 expect_block 'cat "#override.md"' "'cat' in a Bash call" # quoted marker in DATA does not escape (fix #4)
-expect_gate  'git add . #override'                       # #override never skips a safety gate
+expect_gate  'git add . #override'                       # #override never skips a workflow gate
 
 echo "== passes (allow, silent) =="
 expect_allow 'git status'

@@ -16,7 +16,7 @@ A determined or prompt-injected agent can defeat string heuristics; closing ever
 
 ## Not ours — upstream Claude Code
 
-- **The allowlist is quote-blind.** Claude Code's permission matcher matches the whole command text, so `Bash(git diff *)` matches `git diff …` but not `git "diff" …` (reported in claude-code #23670). Our *gate* dequote works around this for the safety gates, but the *allowlist* is CC's. This **fails safe**: a quoted command that dodges an `allow` rule gets a prompt, not a bypass.
+- **The allowlist is quote-blind.** Claude Code's permission matcher matches the whole command text, so `Bash(git diff *)` matches `git diff …` but not `git "diff" …` (reported in claude-code #23670). Our *gate* dequote works around this for the workflow gates, but the *allowlist* is CC's. This **fails safe**: a quoted command that dodges an `allow` rule gets a prompt, not a bypass.
 
 ## Fails safe — annoying at worst
 
@@ -35,6 +35,6 @@ The guard is calibrated to observed Claude Code behavior (developed against 2.1.
 
 ## Reporting
 
-The [test suite](tests/run.sh) encodes the intended behavior, including the tricky cases. A genuine bug is one where the guard diverges from what the tests assert — for example a rule misfiring on an ordinary **cooperative** command, a portability break, or a safety gate that fails to fire.
+The [test suite](tests/run.sh) encodes the intended behavior, including the tricky cases. A genuine bug is one where the guard diverges from what the tests assert — for example a rule misfiring on an ordinary **cooperative** command, a portability break, or a workflow gate that fails to fire.
 
 File those (and feature ideas) as **GitHub Issues** on this repo. If you think one of the items above should move from "non-issue" to "issue," open one and make the case — but the burden is *why it's in scope for a habit tool*, not for a sandbox.

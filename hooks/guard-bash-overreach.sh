@@ -6,9 +6,9 @@
 #      (or that a first-class tool does better), and feed a one-line correction
 #      back to the model on stderr. The model rewrites and retries — the user
 #      never sees a prompt. A block means "rewrite," not "ask the human."
-#   2. SAFETY gates (permissionDecision:ask): FORCE a confirmation on the few git
-#      subcommands Claude Code auto-approves but shouldn't (they mutate the index,
-#      working tree, history, or a branch). Here a block DOES mean "ask the human."
+#   2. WORKFLOW gates (permissionDecision:ask): FORCE a confirmation on the few git
+#      subcommands Claude Code auto-approves but that YOU drive (they mutate the
+#      index, working tree, history, or a branch). Here a block means "ask the human."
 #
 # ENVIRONMENT ASSUMPTIONS (read before adopting — some guidance flips otherwise):
 #   - A NATIVE macOS/Linux Claude Code build (2.1.117+) with NO Grep/Glob tools:
@@ -21,7 +21,7 @@
 #   - `jq` (used to parse the hook payload) — ships with Claude Code, nothing to install.
 #
 # THE ESCAPE HATCH. Put the marker  #override  anywhere in a command to skip the
-# OVERREACH checks (NOT the safety gates). It is deliberately NOT mentioned in any
+# OVERREACH checks (NOT the workflow gates). It is deliberately NOT mentioned in any
 # rule message — so a block nudges you to rewrite, and reaching for the escape is a
 # conscious choice, not the reflexive way past. Every use is logged (see below) so
 # "success is silent" doesn't hide overuse.
@@ -41,7 +41,7 @@
 #   - a tool run raw/npx when a package.json script wraps it (jest…)   -> npm run <script>
 #   - editing a file via a shell interpreter (sed -i, node -e write…)  -> Edit/Write tool
 #
-# The safety gates (permissionDecision:ask -> force a confirmation):
+# The workflow gates (permissionDecision:ask -> force a confirmation):
 #   - mutating `git branch` (force/delete/rename/copy)
 #   - any index/worktree/history-mutating git subcommand
 #     (add/reset/restore/rm/stash/checkout/switch/clean/commit/push)
@@ -56,12 +56,12 @@ cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || t
 # and segment-leader checks use $scan; the raw $cmd is kept for content checks.
 scan="$(printf '%s' "$cmd" | sed "s/'[^']*'//g; s/\"[^\"]*\"//g")"
 
-# Dequoted view for the git safety gates: strip quote CHARACTERS but keep their
+# Dequoted view for the git workflow gates: strip quote CHARACTERS but keep their
 # contents, so `git "push"` / `git p"u"sh` can't hide a mutating subcommand from a
 # gate the way $scan (which deletes whole quoted spans) would.
 dequoted="$(printf '%s' "$cmd" | tr -d "\"'")"
 
-# Rule 8 — SAFETY gate, checked BEFORE the #override escape so it can't be waved
+# Rule 8 — WORKFLOW gate, checked BEFORE the #override escape so it can't be waived
 # through. A mutating `git branch` (force/delete/rename/copy): Claude Code
 # classifies ALL of `git branch …` as read-only, so `git branch -f/-d/-D/-m/-M/-c/-C`
 # auto-approves and can force-move or delete a branch with NO prompt. Force a human
@@ -78,7 +78,7 @@ if printf '%s' "$dequoted" | grep -Eq '(^|[^[:alnum:]_])git([[:space:]]+[^;|&[:s
   fi
 fi
 
-# Rule 8b — SAFETY gate (before the escape, so it can't be #override'd past): git
+# Rule 8b — WORKFLOW gate (before the escape, so it can't be #override'd past): git
 # subcommands that mutate the index, working tree, or history — which you manage
 # yourself (the index and any uncommitted work are yours to stage/commit). Claude
 # Code read-only-misclassifies some of these so they auto-approve. Force a
@@ -91,7 +91,7 @@ fi
 
 # Escape hatch for the OVERREACH rules below: put  #override  anywhere to skip
 # them (deliberate last resort — not advertised in the messages). Does NOT skip
-# the git safety gates above (branch + index/worktree/history). Each use is logged.
+# the git workflow gates above (branch + index/worktree/history). Each use is logged.
 # Matched against $scan so a quoted "#override" in data (a filename, a grep pattern)
 # can't disable the rules — only a real unquoted trailing marker counts.
 case "$scan" in
