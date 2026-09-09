@@ -13,13 +13,20 @@
 
 GUARD="${1:-$(cd "$(dirname "$0")/.." && pwd)/hooks/guard-bash-overreach.sh}"
 export HOME="$(mktemp -d)"
-trap 'rm -rf "$HOME"' EXIT
+FIXTURE="$(mktemp -d)"           # a fake repo for Rule 10 (package.json + a subdir)
+trap 'rm -rf "$HOME" "$FIXTURE"' EXIT
 mkdir -p "$HOME/.claude/hooks"   # let escape-log writes land where we can inspect them
+mkdir -p "$FIXTURE/sub"
+printf '%s\n' '{ "scripts": { "test": "jest --silent", "lint": "eslint --max-warnings=0 ." } }' > "$FIXTURE/package.json"
 pass=0 fail=0
 
-run() { # $1 = command; sets $out $err $code
+run() { # $1 = command, $2 = optional payload cwd; sets $out $err $code
   local payload err_file
-  payload="$(jq -nc --arg c "$1" '{tool_input:{command:$c}}')"
+  if [ -n "$2" ]; then
+    payload="$(jq -nc --arg c "$1" --arg cwd "$2" '{tool_input:{command:$c},cwd:$cwd}')"
+  else
+    payload="$(jq -nc --arg c "$1" '{tool_input:{command:$c}}')"
+  fi
   err_file="$(mktemp)"
   out="$(printf '%s' "$payload" | bash "$GUARD" 2>"$err_file")"
   code=$?
@@ -30,13 +37,13 @@ run() { # $1 = command; sets $out $err $code
 ok()  { pass=$((pass + 1)); }
 bad() { fail=$((fail + 1)); printf 'FAIL  %s\n        %s\n' "$1" "$2"; }
 
-expect_block() { run "$1"
+expect_block() { run "$1" "$3"
   if [ "$code" -eq 2 ] && printf '%s' "$err" | grep -qF "$2"; then ok
   else bad "block: $1" "want exit 2 + [$2]; got code=$code err=[$err]"; fi; }
-expect_gate()  { run "$1"
+expect_gate()  { run "$1" "$2"
   if [ "$code" -eq 0 ] && printf '%s' "$out" | grep -q '"permissionDecision":"ask"'; then ok
   else bad "gate:  $1" "want ask JSON; got code=$code out=[$out]"; fi; }
-expect_allow() { run "$1"
+expect_allow() { run "$1" "$2"
   if [ "$code" -eq 0 ] && [ -z "$out" ] && [ -z "$err" ]; then ok
   else bad "allow: $1" "want silent exit 0; got code=$code out=[$out] err=[$err]"; fi; }
 
@@ -78,6 +85,14 @@ expect_allow 'git branch --list'
 expect_allow 'grep -rn foo src'
 expect_allow 'grep -c foo src | wc -l'         # grep|wc count exemption
 expect_allow 'ls -la'
+
+echo "== Rule 10 — raw/npx tool with a wrapping package.json (cwd-aware) =="
+expect_block 'npx jest'              "running 'jest' raw/npx"   "$FIXTURE"
+expect_block 'jest --watch'          "running 'jest' raw/npx"   "$FIXTURE"
+expect_block 'npx eslint .'          "running 'eslint' raw/npx" "$FIXTURE"
+expect_block 'npx jest --coverage x' "running 'jest' raw/npx"   "$FIXTURE"
+expect_block 'npx jest'              "running 'jest' raw/npx"   "$FIXTURE/sub"  # nearest package.json is one dir up
+expect_allow 'npx jest'              "$HOME"                                    # control: no wrapping script above -> passes
 
 echo "== escape log sanitization =="
 LOG="$HOME/.claude/hooks/override-escapes.log"

@@ -224,18 +224,31 @@ fi
 
 # Rule 10 — a tool run raw / via npx when a package.json script wraps it. The
 # script carries the project's required flags/env (e.g. eslint's --max-warnings=0).
-# DYNAMIC: looks the tool up in the current repo's ./package.json, so it only fires
-# when a wrapping script actually exists — a tool with no script passes, and it
-# stays correct across repos. Detection uses segment leaders so a tool name
-# appearing as an ARG (e.g. `rg jest src`) is not flagged. Extend the tool list to
-# taste; jest/eslint/tsc are common cases.
-if [ -f package.json ]; then
-  t="$(printf '%s\n' "$leaders" | grep -m1 -oxE 'jest|eslint|tsc' || true)"
-  if [ -z "$t" ] && printf '%s\n' "$leaders" | grep -qx 'npx'; then
-    t="$(printf '%s' "$scan" | grep -oE 'npx[[:space:]]+(jest|eslint|tsc)([[:space:]]|$)' | grep -m1 -oE 'jest|eslint|tsc' || true)"
-  fi
-  if [ -n "$t" ]; then
-    wrap="$(jq -r --arg t "$t" '.scripts // {} | to_entries[] | select(.value | test("\\b" + $t + "\\b")) | .key' package.json 2>/dev/null | tr '\n' ' ' | sed 's/ *$//')"
+# DYNAMIC: looks the tool up in the NEAREST package.json at or above the command's
+# working directory — so it fires whether the command runs from the repo root OR a
+# subdirectory, and stays correct across repos (a tool with no wrapping script
+# passes). The working directory comes from the hook payload's own `cwd` (the
+# session's live cwd, which tracks `cd`), NOT a process-relative `./package.json` —
+# that relative lookup silently no-op'd whenever the hook wasn't at the repo root.
+# Detection uses segment leaders so a tool name appearing as an ARG (e.g. `rg jest
+# src`) is not flagged. Extend the tool list to taste; jest/eslint/tsc are common.
+t="$(printf '%s\n' "$leaders" | grep -m1 -oxE 'jest|eslint|tsc' || true)"
+if [ -z "$t" ] && printf '%s\n' "$leaders" | grep -qx 'npx'; then
+  t="$(printf '%s' "$scan" | grep -oE 'npx[[:space:]]+(jest|eslint|tsc)([[:space:]]|$)' | grep -m1 -oE 'jest|eslint|tsc' || true)"
+fi
+if [ -n "$t" ]; then
+  # Nearest package.json walking up from the payload cwd ($PWD as a fallback).
+  pkgdir="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)"
+  [ -n "$pkgdir" ] || pkgdir="$PWD"
+  pkgjson=""
+  while :; do
+    if [ -f "$pkgdir/package.json" ]; then pkgjson="$pkgdir/package.json"; break; fi
+    parent="$(dirname "$pkgdir")"
+    [ "$parent" = "$pkgdir" ] && break
+    pkgdir="$parent"
+  done
+  if [ -n "$pkgjson" ]; then
+    wrap="$(jq -r --arg t "$t" '.scripts // {} | to_entries[] | select(.value | test("\\b" + $t + "\\b")) | .key' "$pkgjson" 2>/dev/null | tr '\n' ' ' | sed 's/ *$//')"
     if [ -n "$wrap" ]; then
       echo "Overreach: running '$t' raw/npx, but package.json wraps it — use  npm run  (matching script: $wrap). The script carries the project's required flags/env (e.g. eslint's --max-warnings=0); raw/npx silently drops them. Pass extra args with  npm run <script> -- <args> ." >&2
       exit 2
