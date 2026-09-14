@@ -94,6 +94,12 @@ expect_block 'npx jest --coverage x' "running 'jest' raw/npx"   "$FIXTURE"
 expect_block 'npx jest'              "running 'jest' raw/npx"   "$FIXTURE/sub"  # nearest package.json is one dir up
 expect_allow 'npx jest'              "$HOME"                                    # control: no wrapping script above -> passes
 
+echo "== Rule 9b — pager-disabling git flag (no-op in the tool, breaks the allowlist) =="
+expect_block 'git -c core.pager=cat show f491d6c --stat' 'pager-disabling git flag'
+expect_block 'git --no-pager log --oneline -20'          'pager-disabling git flag'
+expect_gate  'git -c core.pager=cat commit -m wip'       # mutation still gates first (Rule 8b), not corrected
+expect_allow 'git show f491d6c --stat --date=short'      # control: plain git show, no pager flag
+
 echo "== heredoc bodies are data, not shell (no false overreach) =="
 hd_py="$(printf '%s\n' \
   "docker exec -i app python manage.py shell <<'PY'" \
