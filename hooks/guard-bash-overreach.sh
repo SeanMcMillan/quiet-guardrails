@@ -50,6 +50,32 @@ input="$(cat)"
 cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || true)"
 [ -n "$cmd" ] || exit 0
 
+# Strip heredoc BODIES (`<<WORD … WORD`, incl. `<<'WORD'` / `<<"WORD"` / `<<-WORD`):
+# the body is data for another program (python/sql/node), never shell syntax, so no
+# structural rule should scan it — the same idea as the quoted-span stripping below.
+# It once flagged a Python `for` inside `docker exec … python manage.py shell <<PY`
+# as a shell loop. Only the `<<WORD` operator is removed from the opening line (a
+# trailing redirect or `#override` on that line survives); the body lines up to the
+# closing delimiter are dropped. $rawcmd keeps the original command for the escape log.
+rawcmd="$cmd"
+cmd="$(printf '%s' "$cmd" | awk '
+  inbody {
+    l = $0; sub(/^[[:space:]]*/, "", l); sub(/[[:space:]]*$/, "", l)
+    if (l == delim) inbody = 0
+    next
+  }
+  {
+    if (match($0, /<<-?[[:space:]]*[^[:space:];|&<>]+/)) {
+      tok = substr($0, RSTART, RLENGTH); sub(/^<<-?[[:space:]]*/, "", tok); gsub(/["'\'']/, "", tok)
+      if (tok ~ /^[A-Za-z_][A-Za-z0-9_]*$/) {
+        delim = tok; inbody = 1
+        $0 = substr($0, 1, RSTART - 1) substr($0, RSTART + RLENGTH)
+      }
+    }
+    print
+  }
+')"
+
 # Quote-stripped view for structural checks: remove single- and double-quoted
 # spans so a `|`, `$(`, `;`, or `for` INSIDE a quoted regex/arg (e.g.
 # `grep -E 'a|b'`) is not mistaken for a shell operator. Only the pipe/subst/loop
@@ -98,7 +124,7 @@ case "$scan" in
   *'#override'*)
     # Sanitize tabs/newlines out of the logged command so a crafted argument
     # can't forge extra rows in the TSV log.
-    logcmd="$(printf '%s' "$cmd" | tr '\t\n' '  ')"
+    logcmd="$(printf '%s' "$rawcmd" | tr '\t\n' '  ')"
     printf '%s\t%s\t%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$PWD" "$logcmd" \
       2>/dev/null >> "$HOME/.claude/hooks/override-escapes.log"
     exit 0

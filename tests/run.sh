@@ -94,6 +94,19 @@ expect_block 'npx jest --coverage x' "running 'jest' raw/npx"   "$FIXTURE"
 expect_block 'npx jest'              "running 'jest' raw/npx"   "$FIXTURE/sub"  # nearest package.json is one dir up
 expect_allow 'npx jest'              "$HOME"                                    # control: no wrapping script above -> passes
 
+echo "== heredoc bodies are data, not shell (no false overreach) =="
+hd_py="$(printf '%s\n' \
+  "docker exec -i app python manage.py shell <<'PY'" \
+  "from consumer.models import Consumer" \
+  "for c in Consumer.objects.all():" \
+  "    print(c)" \
+  "PY")"
+expect_allow "$hd_py"                                   # a Python 'for' in the body is not a shell loop
+hd_sql="$(printf '%s\n' "psql <<'SQL'" "SELECT * FROM t WHERE a | b;" "SQL")"
+expect_allow "$hd_sql"                                  # SQL '|' in the body is not a shell pipe
+hd_commit="$(printf '%s\n' "git commit -F - <<'MSG'" "wip | tidy" "MSG")"
+expect_gate  "$hd_commit"                               # the shell command around the heredoc still gates
+
 echo "== escape log sanitization =="
 LOG="$HOME/.claude/hooks/override-escapes.log"
 : > "$LOG"

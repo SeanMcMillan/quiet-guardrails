@@ -17,6 +17,15 @@ So this list is fed mostly by live flagging, not log-mining.
 
 ## Open items
 
+### Repo-destined file authored in the scratchpad, then `cp`'d into the repo · seen 2026-09-10
+
+An agent wrote a probe test (`legendProbe.test.tsx`) into the scratchpad, then ran `cp <scratchpad>/legendProbe.test.tsx <repo>/…/__tests__/legendProbe.test.tsx`. The cp **succeeded** (after a prompt). Two things of note:
+
+- **CC's Bash write-analysis is quote-blind (not ours, can't fix from here).** The quoted destination contains `[locale]`/`(dashboard)` (Next.js route dirs); CC flagged `[ ] ( )` as glob patterns ("Glob patterns are not allowed in write operations") even though the quotes prevent any expansion — a false-positive, same family as CC's allowlist quote-blindness (claude-code #23670). It nags but is harmless (the cp ran), and our guard can't suppress CC's own filter.
+- **The `cp` is the symptom, not the cause.** The real mistake was authoring a repo-destined file in the scratchpad at all — a **Write-tool** call. By the time the `cp` appears, the tmp file already exists. Our guard is a **Bash** PreToolUse hook, so it never sees Write/Edit and structurally cannot catch the origin. This is the guard's first observed *tool-write* blind spot (everything else it gates is a Bash shape).
+
+- **Grindable?** Only by expanding beyond Bash: a PreToolUse hook on the **Write tool** that flags a repo-destined file (`.test.tsx`, `.spec.*`, source `.ts(x)`) written into scratchpad/tmp → "author it at its repo path; the scratchpad is for throwaway artifacts, not repo files staged for a copy." Fires at origin, before the tmp file and the cp. **One sample + new infrastructure (a second matcher)** — watch for recurrence before building it. Symptom-level `cp`/`mv` rules are the wrong layer and were rejected.
+
 ### `npx --<flag> <tool>` (flag between npx and the tool) slips Rule 10 · noted 2026-09-09
 
 Rule 10 (raw/npx tool that a package.json script wraps → `npm run <script>`) matches only the tool *immediately* after `npx` — its regex is `npx[[:space:]]+(jest|eslint|tsc)`. So `npx --no-install jest`, `npx --yes eslint`, `npx -y tsc` are not recognized and fall through to a prompt instead of the correction. Env-assignment *prefixes* (`CI=1 npx jest`) are already handled by the leader extraction; this is specifically an npx *flag* between `npx` and the tool.
