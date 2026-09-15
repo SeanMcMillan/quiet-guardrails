@@ -308,4 +308,28 @@ if { printf '%s\n' "$leaders" | grep -qxE 'sed|perl' && printf '%s' "$cmd" | gre
   exit 2
 fi
 
+# Rule 12 — reading changed CONTENT through gh instead of local git. `gh pr diff`
+# and `gh api …/commits/<sha>` / `…/compare/a...b` fetch diffs/commits over the API
+# and prompt (gh api can't be safely allowlisted — any path takes a trailing -X/-f
+# that writes). The objects are in the local checkout, one `git fetch` away if a ref
+# is missing, where plain git is read-only and whitelist-passing. Assumes a gh/git
+# workflow with the repo checked out.
+if printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+pr[[:space:]]+diff([[:space:]]|$)' \
+   || printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+api[[:space:]][^;|&]*(commits/|compare/)'; then
+  echo "Overreach: reading changed content through gh (gh pr diff, or gh api …/commits|compare). Those hit the API and prompt; the objects are in your local checkout. Run 'git fetch' if the ref is missing, then plain git — 'git show <sha>', 'git log <a>..<b>', 'git diff <a>...<b>' — which is read-only and whitelist-passing." >&2
+  exit 2
+fi
+
+# Rule 13 — reading PR conversation/review comments via `gh api …/pulls/<n>/comments`
+# (REST). Use `gh pr view <n> --comments` / `--json comments,reviews` (read-only and
+# whitelistable) instead. EXCEPTION: inline diff-line review threads are not a
+# `gh pr view` field and genuinely need `gh api graphql … reviewThreads`, which has
+# no read-only equivalent and correctly prompts — that call is explicitly NOT flagged.
+if printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+api[[:space:]]' \
+   && printf '%s' "$scan" | grep -Eq 'pulls/[^;|&]*comments' \
+   && ! printf '%s' "$scan" | grep -Eq 'graphql'; then
+  echo "Overreach: reading PR comments via 'gh api …/pulls/<n>/comments'. Use 'gh pr view <n> --comments' or 'gh pr view <n> --json comments,reviews' — read-only and whitelistable. (Inline diff-line review threads are the exception: they need 'gh api graphql … reviewThreads', which has no read-only equivalent and will correctly prompt — don't reroute that one.)" >&2
+  exit 2
+fi
+
 exit 0

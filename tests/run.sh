@@ -100,6 +100,16 @@ expect_block 'git --no-pager log --oneline -20'          'pager-disabling git fl
 expect_gate  'git -c core.pager=cat commit -m wip'       # mutation still gates first (Rule 8b), not corrected
 expect_allow 'git show f491d6c --stat --date=short'      # control: plain git show, no pager flag
 
+echo "== Rules 12/13 — gh read redirects to local git / gh pr view (graphql exempt) =="
+expect_block 'gh pr diff 42'                            'reading changed content through gh'
+expect_block 'gh api repos/o/r/commits/abc123'          'reading changed content through gh'
+expect_block 'gh api repos/o/r/compare/main...feature'  'reading changed content through gh'
+expect_block 'gh api repos/o/r/pulls/42/comments'       'reading PR comments'
+expect_allow "gh api graphql -f query='{ reviewThreads }'"  # inline threads: no read-only equivalent, must NOT be flagged
+expect_allow 'gh pr view 42 --comments'                 # correct form: read-only, whitelistable
+expect_allow 'gh pr view 42 --json state,mergedAt'      # PR metadata via gh pr view is fine
+expect_allow 'git show abc123 --stat'                   # the git form Rule 12 steers toward
+
 echo "== heredoc bodies are data, not shell (no false overreach) =="
 hd_py="$(printf '%s\n' \
   "docker exec -i app python manage.py shell <<'PY'" \
