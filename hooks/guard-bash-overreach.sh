@@ -50,6 +50,14 @@ input="$(cat)"
 cmd="$(printf '%s' "$input" | jq -r '.tool_input.command // ""' 2>/dev/null || true)"
 [ -n "$cmd" ] || exit 0
 
+# Subagent detection: the PreToolUse payload carries `agent_id` ONLY inside a subagent
+# call. Subagents do NOT persist cwd across separate Bash calls (documented) — each
+# starts fresh in the primary dir — so the cd-based correctors (Rules 6, 9) that steer
+# to a standalone `cd` are wrong there and are skipped when this is set, leaving the
+# subagent its cwd-independent forms (`cd && git` in ONE call, `git -C`, etc.). The
+# mutation gates (8/8b) are NOT gated on this — they still fire in subagents.
+is_subagent="$(printf '%s' "$input" | jq -r '.agent_id // empty' 2>/dev/null || true)"
+
 # Strip heredoc BODIES (`<<WORD … WORD`, incl. `<<'WORD'` / `<<"WORD"` / `<<-WORD`):
 # the body is data for another program (python/sql/node), never shell syntax, so no
 # structural rule should scan it — the same idea as the quoted-span stripping below.
@@ -140,9 +148,11 @@ if printf '%s' "$cmd" | grep -Eq '(^|[^[:alnum:]_])python3?([^[:alnum:]_]|$)' \
   fi
 fi
 
-# Leading command of every segment (split on \n ; | && || $( and backticks).
+# Leading command of every segment (split on \n ; | && || $( () and backticks).
+# `()` are split too so a subshell — `(cd x && git status)` — yields the bare
+# leaders `cd`/`git` rather than `(cd`, and Rule 6 still catches the bundle.
 leaders="$(printf '%s' "$scan" | awk '
-  { s=$0; gsub(/\$\(/,"\n",s); gsub(/`/,"\n",s); gsub(/&&/,"\n",s); gsub(/\|\|/,"\n",s); gsub(/\|/,"\n",s); gsub(/;/,"\n",s); print s }
+  { s=$0; gsub(/\$\(/,"\n",s); gsub(/`/,"\n",s); gsub(/&&/,"\n",s); gsub(/\|\|/,"\n",s); gsub(/\|/,"\n",s); gsub(/;/,"\n",s); gsub(/[()]/,"\n",s); print s }
 ' | awk '
   { i=1; while ($i ~ /=/ || $i=="sudo" || $i=="command" || $i=="nohup") i++; if ($i=="timeout"){i++;i++} if ($i!="") print $i }
 ')"
@@ -222,8 +232,10 @@ fi
 
 # Rule 6 — cd + git in one command. Claude Code prompts on this (git in a freshly
 # cd'd directory can execute that directory's hooks). Splitting is free: `cd` into
-# a working/additional dir auto-approves, and read-only git auto-approves.
-if printf '%s\n' "$leaders" | grep -qx 'cd' && printf '%s\n' "$leaders" | grep -qx 'git'; then
+# a working/additional dir auto-approves, and read-only git auto-approves. Skipped in a
+# subagent — there cwd doesn't persist across calls, so `cd X && git` in ONE call is the
+# working form and splitting into separate calls would run git in the wrong dir.
+if [ -z "$is_subagent" ] && printf '%s\n' "$leaders" | grep -qx 'cd' && printf '%s\n' "$leaders" | grep -qx 'git'; then
   echo "Overreach: 'cd' + 'git' bundled in one command — Claude Code prompts because git in a freshly cd'd directory can run that directory's hooks. Run the 'cd <dir>' as its OWN call (it auto-approves into a working/additional dir), then each 'git …' as a separate call." >&2
   exit 2
 fi
@@ -238,13 +250,19 @@ if printf '%s\n' "$leaders" | grep -qx 'find' \
   exit 2
 fi
 
-# Rule 9 — `git -C <path>` (global directory flag). Defeats CC's read-only
-# auto-approve: -C shifts the subcommand token out of the read-only detector's
-# reach, so even `git -C … status/log/diff` prompts. Steer to plain git. Case-
-# sensitive, and only right after `git`, so `git log -C` (copy detection) is
-# untouched.
-if printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])git[[:space:]]+-C([[:space:]]|$)'; then
-  echo "Overreach: 'git -C <path>' defeats CC's read-only auto-approve (the -C shifts the subcommand token, so even read-only git prompts). If <path> is your current repo, drop -C and run plain git (e.g. 'git status --short --branch'). If it's a different repo, use a standalone 'cd <path>' then plain git. Not sure where you are? run 'pwd' first, then plain git — don't defensively -C." >&2
+# Rule 9 — git pointed at another repo, by flag OR environment variable: the flags
+# `-C <path>` / `--git-dir=<path>` / `--work-tree=<path>`, and the env vars
+# `GIT_DIR=` / `GIT_WORK_TREE=`. Each relocates git and shifts the subcommand token
+# out of CC's read-only detector's reach, so even `git … status/log/diff` prompts.
+# Steer to a standalone `cd` + plain git. The `-C` match is case-sensitive and only
+# right after `git` (so `git log -C` copy-detection is untouched); the env-var match
+# needs an assignment (`GIT_DIR=`), so a bare `$GIT_DIR` reference is left alone. Skipped
+# in a subagent — there the relocation flags are the cwd-INDEPENDENT way to reach another
+# repo (a standalone `cd` can't persist), so they're the fix, not the mistake.
+if [ -z "$is_subagent" ] \
+   && { printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])git[[:space:]]+(-C|--git-dir|--work-tree)([[:space:]=]|$)' \
+        || printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])(GIT_DIR|GIT_WORK_TREE)='; }; then
+  echo "Overreach: git pointed at another repo — via a repo-location flag ('-C <path>', '--git-dir=', '--work-tree=') or an env var ('GIT_DIR=', 'GIT_WORK_TREE='). Either shifts the subcommand token, so even a read-only git prompts. Same repo? drop it and run plain git (e.g. 'git status --short --branch'). A DIFFERENT repo? use a standalone 'cd <path>' then plain git — cd into a working/additional dir auto-approves. Not sure where you are? run 'pwd' first." >&2
   exit 2
 fi
 
@@ -308,15 +326,15 @@ if { printf '%s\n' "$leaders" | grep -qxE 'sed|perl' && printf '%s' "$cmd" | gre
   exit 2
 fi
 
-# Rule 12 — reading changed CONTENT through gh instead of local git. `gh pr diff`
-# and `gh api …/commits/<sha>` / `…/compare/a...b` fetch diffs/commits over the API
-# and prompt (gh api can't be safely allowlisted — any path takes a trailing -X/-f
-# that writes). The objects are in the local checkout, one `git fetch` away if a ref
-# is missing, where plain git is read-only and whitelist-passing. Assumes a gh/git
-# workflow with the repo checked out.
+# Rule 12 — reading repo content through `gh api` (or `gh pr diff`) instead of the
+# local checkout. `gh pr diff`, `gh api …/commits/<sha>`, `…/compare/a...b`, and
+# `…/contents/<path>` all fetch over the API and prompt (gh api can't be safely
+# allowlisted — any path takes a trailing -X/-f that writes). It's all in the local
+# checkout: diffs/commits via plain git, a file's content via the Read tool. Assumes
+# the repo is checked out locally; one `git fetch` covers a missing ref.
 if printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+pr[[:space:]]+diff([[:space:]]|$)' \
-   || printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+api[[:space:]][^;|&]*(commits/|compare/)'; then
-  echo "Overreach: reading changed content through gh (gh pr diff, or gh api …/commits|compare). Those hit the API and prompt; the objects are in your local checkout. Run 'git fetch' if the ref is missing, then plain git — 'git show <sha>', 'git log <a>..<b>', 'git diff <a>...<b>' — which is read-only and whitelist-passing." >&2
+   || printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+api[[:space:]][^;|&]*(commits/|compare/|contents/)'; then
+  echo "Overreach: reading repo content through gh (gh pr diff, or gh api …/commits|compare|contents). Those hit the API and prompt; it's all in your local checkout. For a diff or commit, use plain git — 'git show <sha>', 'git log <a>..<b>', 'git diff <a>...<b>' (read-only, whitelist-passing; 'git fetch' first if the ref is missing). For a file's content, Read it from the checkout, or 'git show <ref>:<path>' for a specific ref." >&2
   exit 2
 fi
 
@@ -329,6 +347,15 @@ if printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+api[[:space:]]
    && printf '%s' "$scan" | grep -Eq 'pulls/[^;|&]*comments' \
    && ! printf '%s' "$scan" | grep -Eq 'graphql'; then
   echo "Overreach: reading PR comments via 'gh api …/pulls/<n>/comments'. Use 'gh pr view <n> --comments' or 'gh pr view <n> --json comments,reviews' — read-only and whitelistable. (Inline diff-line review threads are the exception: they need 'gh api graphql … reviewThreads', which has no read-only equivalent and will correctly prompt — don't reroute that one.)" >&2
+  exit 2
+fi
+
+# Rule 14 — gh's global `--repo`/`-R` placed BEFORE the subcommand
+# (`gh --repo <owner/repo> pr view …`). It shifts the subcommand past the start, so
+# the command no longer begins `gh pr view` and misses the `gh pr view *` allowlist
+# prefix — it prompts. gh accepts the flag AFTER the subcommand too, so move it there.
+if printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+(-R|--repo)([[:space:]=]|$)'; then
+  echo "Overreach: gh's '--repo'/'-R' flag placed before the subcommand ('gh --repo <owner/repo> pr view …') no longer starts with 'gh pr view', so it misses the 'gh pr view *' allowlist and prompts. gh takes the flag after the subcommand — write 'gh pr view <n> --repo <owner/repo> …' and it auto-approves." >&2
   exit 2
 fi
 
