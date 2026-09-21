@@ -2,7 +2,7 @@
 
 **manual mode, minus the nagging** — deterministic guardrails that quiet the safe prompts in Claude Code and keep you in control.
 
-A single PreToolUse hook + a curated allowlist that make Claude Code **stop asking about safe work and start self-correcting its own bad habits** — while still forcing a confirmation on the few things that genuinely deserve one.
+A pair of PreToolUse hooks (Bash + Write) + a curated allowlist that make Claude Code **stop asking about safe work and start self-correcting its own bad habits** — while still forcing a confirmation on the few things that genuinely deserve one.
 
 It's a deliberate alternative to auto mode. Where auto mode asks an LLM classifier to judge each action (probabilistic, opaque, per-call), this takes the opposite bet: **make the model's default behavior correct and frictionless, deterministically**, and keep *you* in control of exactly what runs unattended.
 
