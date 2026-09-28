@@ -314,15 +314,17 @@ if [ -n "$t" ]; then
 fi
 
 # Rule 11 — editing a file THROUGH a shell interpreter instead of the Edit/Write
-# tool: `sed -i` / `perl -i` (in-place), or a `node`/`python`/`perl` `-e`/`-c`
-# that writes a file. A blind regex mutation that also prompts (arbitrary code /
-# file write). Read-only forms — `sed 's/…/…/' file` (prints), `node -e` that
-# only computes/prints — have no in-place flag or write call and pass.
+# tool: `sed -i` / `perl -i` (in-place), or a `node`/`python`/`perl` fed inline
+# code that writes a file — via `-e`/`-c`, via stdin `-`, or via a heredoc
+# (`python3 - <<'PY' … p.write_text(…) … PY`). A blind mutation that also prompts
+# (arbitrary code / file write). Read-only inline forms — `node -e` that only
+# computes/prints, a heredoc that only reads — have no write call and pass, as
+# does running a committed script (`python3 script.py`: no -e/-/heredoc).
 if { printf '%s\n' "$leaders" | grep -qxE 'sed|perl' && printf '%s' "$cmd" | grep -Eq '(^|[[:space:]])(-[a-zA-Z]*i|--in-place)([[:space:]=.'\'']|$)'; } \
-   || { printf '%s\n' "$leaders" | grep -qxE 'node|python|python3|perl' \
-        && printf '%s' "$cmd" | grep -Eq '(-e|-c|--eval|--exec)([[:space:]]|$)' \
-        && printf '%s' "$cmd" | grep -Eq 'writeFileSync|writeFile|appendFileSync|appendFile|fs\.write|\.write\(|writelines|write_text'; }; then
-  echo "Overreach: editing a file through a shell interpreter (sed -i / perl -i, or node/python -e that writes a file) — a blind mutation that also prompts. Use the Edit or Write tool: reviewable, harness-tracked, and won't mangle the file on a slightly-off regex. For a REPEATED edit, use Edit with replace_all (one call per distinct old->new)." >&2
+   || { printf '%s\n' "$leaders" | grep -qxE 'node|python|python3|perl|ruby' \
+        && printf '%s' "$rawcmd" | grep -Eq '(-e|-c|--eval|--exec)([[:space:]]|$)|(^|[[:space:]])-([[:space:]]|$)|<<' \
+        && printf '%s' "$rawcmd" | grep -Eq 'writeFileSync|writeFile|appendFileSync|appendFile|fs\.write|\.write\(|writelines|write_text'; }; then
+  echo "Overreach: editing a file through a shell interpreter (sed -i / perl -i, or node/python fed inline code via -e, stdin -, or a heredoc that writes a file) — a blind mutation that also prompts. Use the Edit or Write tool: reviewable, harness-tracked, and won't mangle the file on a slightly-off anchor. For a REPEATED edit, use Edit with replace_all (one call per distinct old->new)." >&2
   exit 2
 fi
 

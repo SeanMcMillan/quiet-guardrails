@@ -103,6 +103,9 @@ expect_block 'sed -Ei "s/a/b/" f'              'shell interpreter'   # combined-
 expect_block 'perl -pi -e "s/a/b/" f'          'shell interpreter'   # perl -pi fix (#6)
 expect_block "sed 's/a/b/' f"                  'gates sed'           # read-only sed steered off (Rule 11b)
 expect_block "ls | sed 's|.*/||'"              'gates sed'           # read-only sed in a pipe
+expect_block $'python3 - <<PY\np.write_text("x")\nPY'   'shell interpreter'  # heredoc python that writes (Rule 11 stdin/heredoc)
+expect_block $'node - <<JS\nfs.writeFileSync("f","x")\nJS' 'shell interpreter'  # stdin-dash node write
+expect_allow $'python3 - <<PY\nprint(1+1)\nPY'                              # read-only heredoc python still passes
 
 echo "== workflow gates (force a prompt, exit 0 + ask) =="
 expect_gate 'git add .'
