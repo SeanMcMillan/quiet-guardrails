@@ -101,6 +101,8 @@ expect_block 'python3 munge.py data.json'      'parsing JSON'
 expect_block 'sed -i "s/a/b/" f'               'shell interpreter'
 expect_block 'sed -Ei "s/a/b/" f'              'shell interpreter'   # combined-flag fix (#6)
 expect_block 'perl -pi -e "s/a/b/" f'          'shell interpreter'   # perl -pi fix (#6)
+expect_block "sed 's/a/b/' f"                  'gates sed'           # read-only sed steered off (Rule 11b)
+expect_block "ls | sed 's|.*/||'"              'gates sed'           # read-only sed in a pipe
 
 echo "== workflow gates (force a prompt, exit 0 + ask) =="
 expect_gate 'git add .'

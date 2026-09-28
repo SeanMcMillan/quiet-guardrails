@@ -25,7 +25,9 @@ After the default model switched to Opus 5, Explore subagents investigating the 
 
 In the **main session** those forms self-correct to a local read or the whitelisted gh form (cwd persists there, so the correction lands prompt-free): git relocation (flags + env) → **Rule 9**; cd/subshell bundles → **Rule 6**; gh-api content (commits/compare/contents) + `gh pr diff` → **Rule 12**; `gh --repo` before the subcommand → **Rule 14**. In a **subagent** those corrections are carved out (they'd misfire) — see the Update.
 
-**Watch for more of the class** (other cwd-independent / remote-fetch reaches, not yet seen): `curl`/`gh api` on `raw.githubusercontent.com`, `gh repo view`, `gh api repos/<o>/<r>` metadata, `git ls-remote`/`git archive`. Add a redirect when one shows up.
+**Watch for more of the class** (other cwd-independent / remote-fetch reaches): `curl`/`gh api` on `raw.githubusercontent.com`, `gh repo view`, `gh api repos/<o>/<r>` metadata, `git archive`. Add a redirect when one shows up.
+
+- `git ls-remote` — **seen 2026-09-28** (`git branch -a --list "*1218*" && git ls-remote --heads origin "*1218*"` to check if the old split branch exists; prompted on the ls-remote half). Local `git branch -a --list` after a `git fetch` already lists remote-tracking refs — no remote round-trip needed. Note-only for now (one sample; ls-remote is a legit authoritative check sometimes) — grind a redirect only if it recurs.
 
 **Update 2026-09-21 — the real driver, and the correctness fix.** Verified (docs, high confidence) that **subagent Bash cwd does not persist across separate calls** — long-standing, documented, NOT a regression. **Worktree isolation does not change this**: the docs say a worktree subagent's `cd` "don't persist between tool calls (same as normal mode)" — the main session is the lone outlier with persistent cwd. And the PreToolUse payload carries **no isolation field** (only `agent_id`/`agent_type`, present just for subagent calls), so there's nothing to key a worktree off of anyway. → `agent_id` alone is the correct and only carve-out key; no worktree branch.
 
@@ -58,3 +60,11 @@ Rule 10 (raw/npx tool that a package.json script wraps → `npm run <script>`) m
 An agent ran `cd <abspath> && npx prettier --version` — described as "confirm cwd" — instead of `pwd`. Weird *semantically* (a probe used as a `pwd` synonym), not structurally: benign `cd && <cmd>` bundles auto-approve, and this one prompted only because `npx …` isn't allowlisted. The prompt was the correct outcome, but it **taught nothing** — a prompt gates; only an exit-2 correction teaches the right shape.
 
 - **Grindable?** Only a narrow slice: `npx <tool> --version|--help` is ceremony in a lockfile project (a tool's presence/version is in `package-lock.json`), so it *could* be corrected → "run it with `npm run <script>`; check location with `pwd`." But it's **one sample** — watch for recurrence before fitting a rule (a finding is a sample, not a population). The general "agent picked a weird probe" is not detectable.
+
+### `printenv OBM_ROLE; ls …` — NOT a sketchy probe (corrected) · seen 2026-09-23
+
+First read as a fabricated-env-var probe; **wrong.** `OBM_ROLE` is the `obm:ticket-intake` plugin skill's documented lens selector, and `printenv OBM_ROLE` is the skill's own step (`~/.claude/plugins/cache/obm-ai-tooling/obm/*/skills/ticket-intake/SKILL.md:45`). The agent followed the skill; I asserted "invented" without reading it (see [[a-name-is-not-evidence]]). Only real observations:
+
+- Prompted because `printenv` isn't allowlisted (the `ls` half is) and the agent chained the skill's `printenv` with an `ls` of the rules dir.
+- **Keep `printenv` unlisted** anyway — bare `printenv` / a secret-bearing var would dump credentials into the transcript (same hazard as `gh auth status --show-token`). So this skill step prompts once per run; acceptable. Do **not** whitelist `printenv *`.
+- No guard action, no feedback. Documented so the same probe isn't re-flagged as suspicious next time.

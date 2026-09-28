@@ -326,6 +326,17 @@ if { printf '%s\n' "$leaders" | grep -qxE 'sed|perl' && printf '%s' "$cmd" | gre
   exit 2
 fi
 
+# Rule 11b — any remaining sed (read-only forms; `sed -i` is caught above). Claude
+# Code's built-in classifier now gates sed even for a plain `s///` substitution
+# (it can't rule out write `w` / execute `e` commands), so every sed prompts and
+# the prompt teaches nothing. Steer off it: a read or transform the agent is about
+# to consume rarely needs sed — run the plain command and read its output, or use
+# the Read tool. Edits go through Edit/Write (Rule 11).
+if printf '%s\n' "$leaders" | grep -qxE 'sed'; then
+  echo "Overreach: Claude Code gates sed (even a read-only s/// substitution), so it always prompts and teaches nothing. Don't reach for sed. For a file edit use the Edit/Write tool. For a read or text transform, run the plain command and read its raw output (e.g. \`ls DIR\` rather than \`ls | sed 's|.*/||'\`), or use the Read tool — you're about to consume the output yourself and rarely need the transform." >&2
+  exit 2
+fi
+
 # Rule 12 — reading repo content through `gh api` (or `gh pr diff`) instead of the
 # local checkout. `gh pr diff`, `gh api …/commits/<sha>`, `…/compare/a...b`, and
 # `…/contents/<path>` all fetch over the API and prompt (gh api can't be safely

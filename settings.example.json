@@ -18,7 +18,9 @@
       "Bash(gh pr diff *)",
       "Bash(gh pr list *)",
       "Bash(gh pr checks *)",
-      "Bash(gh pr status *)"
+      "Bash(gh pr status *)",
+      "Bash(npm view *)",
+      "Bash(gh auth status)"
     ]
   },
   "hooks": {
