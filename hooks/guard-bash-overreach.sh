@@ -341,6 +341,18 @@ if printf '%s\n' "$leaders" | grep -qxE 'sed'; then
   exit 2
 fi
 
+# Rule 11c — an ABSOLUTE path with embedded `../` traversal (e.g.
+# `/Users/…/obm-rts-frontend/../../../../private/tmp/…`). Starting from an absolute
+# root and then climbing out with `..` is always reducible to a plain canonical
+# path; Claude Code's own traversal gate prompts on it ("may follow a symlink
+# outside the working directory"), teaching nothing. Redirect to the canonical
+# absolute path. Uses $cmd so a quoted path is still seen; a relative `../sibling`
+# (no leading `/`) is left alone — only an absolute path that re-climbs matches.
+if printf '%s' "$cmd" | grep -Eq '(^|[[:space:]])/[^[:space:]]*/\.\.(/|$|[[:space:]])'; then
+  echo "Overreach: an absolute path with embedded ../ traversal (…/obm-rts-frontend/../../../private/tmp/…). It climbs out of the project and trips Claude Code's traversal gate. Write the canonical absolute path directly — the scratchpad is already absolute (/private/tmp/claude-…/…/scratchpad/…), no ../ needed — or use the Read tool with that path." >&2
+  exit 2
+fi
+
 # Rule 12 — reading repo content through `gh api` (or `gh pr diff`) instead of the
 # local checkout. `gh pr diff`, `gh api …/commits/<sha>`, `…/compare/a...b`, and
 # `…/contents/<path>` all fetch over the API and prompt (gh api can't be safely

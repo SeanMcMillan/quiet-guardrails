@@ -106,6 +106,9 @@ expect_block "ls | sed 's|.*/||'"              'gates sed'           # read-only
 expect_block $'python3 - <<PY\np.write_text("x")\nPY'   'shell interpreter'  # heredoc python that writes (Rule 11 stdin/heredoc)
 expect_block $'node - <<JS\nfs.writeFileSync("f","x")\nJS' 'shell interpreter'  # stdin-dash node write
 expect_allow $'python3 - <<PY\nprint(1+1)\nPY'                              # read-only heredoc python still passes
+expect_block 'grep -n meter /Users/sean/projects/obm-rts-frontend/../../../private/tmp/x/Main.html' 'traversal'  # Rule 11c
+expect_allow 'grep -n meter /private/tmp/claude-501/x/scratchpad/Main.html'  # clean absolute, no ..
+expect_allow 'grep -n meter ../obm-rts-api/foo.ts'                           # relative ../sibling not caught
 
 echo "== workflow gates (force a prompt, exit 0 + ask) =="
 expect_gate 'git add .'
