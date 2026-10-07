@@ -266,16 +266,18 @@ if [ -z "$is_subagent" ] \
   exit 2
 fi
 
-# Rule 9b — git with a pager-disabling global flag (--no-pager, -c core.pager=…).
-# Claude Code's Bash tool captures git's output through a pipe (no TTY), so git never
-# invokes a pager — the flag is a no-op here. Worse, placed before the subcommand it
-# shifts the token so a read-only `git show`/`log`/`diff` no longer matches the
-# `git <subcmd> *` allowlist and prompts. Drop it and run plain git. Uses $scan, so
-# quoted data (`-m "…core.pager=…"`) is already gone; `git config core.pager cat`
-# (a config *set*, no `=`) does not match. Mutations keep their workflow gate — those
-# run earlier (Rule 8/8b), so `git -c core.pager=cat commit` still asks, not this.
-if printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])git[[:space:]].*(--no-pager|core\.pager=)'; then
-  echo "Overreach: a pager-disabling git flag (--no-pager or -c core.pager=…). Claude Code's Bash tool captures git's output (no TTY), so git never paginates — the flag does nothing here, and putting it before the subcommand shifts the token so a read-only 'git show/log/diff' no longer matches the allowlist and prompts. Drop it and run plain git." >&2
+# Rule 9b — git with a cosmetic global flag that no-ops under capture: a pager
+# disabler (--no-pager, -c core.pager=…) or a color disabler (--no-color,
+# -c color.ui=…/-c color.<slot>=…). Claude Code's Bash tool captures git's output
+# through a pipe (no TTY), so git already paginates nothing AND emits no color — the
+# flag does nothing here. Worse, placed before the subcommand it shifts the token so a
+# read-only `git show`/`log`/`diff` no longer matches the `git <subcmd> *` allowlist
+# and prompts. Drop it and run plain git. Uses $scan, so quoted data
+# (`-m "…core.pager=…"`) is already gone; `git config core.pager cat` (a config *set*,
+# no `=`) does not match. Mutations keep their workflow gate — those run earlier
+# (Rule 8/8b), so `git -c core.pager=cat commit` still asks, not this.
+if printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])git[[:space:]].*(--no-pager|--no-color|core\.pager=|color\.[a-z.]+=)'; then
+  echo "Overreach: a cosmetic git flag that no-ops under capture (--no-pager / -c core.pager=…, or --no-color / -c color.ui=…). Claude Code's Bash tool captures git's output (no TTY), so git already paginates nothing and emits no color — the flag does nothing here, and putting it before the subcommand shifts the token so a read-only 'git show/log/diff' no longer matches the allowlist and prompts. Drop it and run plain git." >&2
   exit 2
 fi
 

@@ -12,6 +12,7 @@
       "Bash(git fetch *)",
       "Bash(git diff *)",
       "Bash(git show *)",
+      "Bash(git log *)",
       "Bash(git ls-tree *)",
       "Bash(git check-ignore *)",
       "Bash(gh pr view *)",
