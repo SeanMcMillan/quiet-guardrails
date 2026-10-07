@@ -109,6 +109,10 @@ expect_allow $'python3 - <<PY\nprint(1+1)\nPY'                              # re
 expect_block 'grep -n meter /Users/sean/projects/obm-rts-frontend/../../../private/tmp/x/Main.html' 'traversal'  # Rule 11c
 expect_allow 'grep -n meter /private/tmp/claude-501/x/scratchpad/Main.html'  # clean absolute, no ..
 expect_allow 'grep -n meter ../obm-rts-api/foo.ts'                           # relative ../sibling not caught
+expect_block 'agent-browser wait --text "$62.12/MWh"'  'inside double quotes'  # Rule 11d: $digit expands + mangles
+expect_allow "agent-browser wait --text '\$62.12/MWh'"                         # single-quoted literal is fine
+expect_allow 'echo "$HOME"'                                                    # letter var, not $<digit>
+expect_allow 'echo "${10}"'                                                    # braced, digit not immediately after $
 
 echo "== workflow gates (force a prompt, exit 0 + ask) =="
 expect_gate 'git add .'

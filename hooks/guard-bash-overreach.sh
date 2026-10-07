@@ -353,6 +353,17 @@ if printf '%s' "$cmd" | grep -Eq '(^|[[:space:]])/[^[:space:]]*/\.\.(/|$|[[:spac
   exit 2
 fi
 
+# Rule 11d — a literal \$<digit> inside DOUBLE quotes (e.g. `--text "\$62.12/MWh"`).
+# In double quotes the shell expands `\$6` (usually to empty), so the value is
+# silently mangled ("\$62.12/MWh" -> "2.12/MWh"); the `\$` also trips Claude Code's
+# expansion prompt. Single-quote it so the `\$` stays literal. Uses $cmd (raw) so the
+# double-quoted span survives; a single-quoted '\$62…', a braced "\${10}", or a
+# letter var "\$HOME" do not match (digit must follow `\$` immediately).
+if printf '%s' "$cmd" | grep -Eq '"[^"]*\$[0-9]'; then
+  echo "Overreach: a literal \$<digit> inside double quotes (e.g. --text \"\$62.12/MWh\"). In double quotes the shell expands \$6 (usually to empty) and silently mangles the value to \"2.12/MWh\"; the \$ also trips Claude Code's variable-expansion prompt. Single-quote the value so the \$ stays literal (e.g. '\$62.12/MWh') — which also stops the prompt." >&2
+  exit 2
+fi
+
 # Rule 12 — reading repo content through `gh api` (or `gh pr diff`) instead of the
 # local checkout. `gh pr diff`, `gh api …/commits/<sha>`, `…/compare/a...b`, and
 # `…/contents/<path>` all fetch over the API and prompt (gh api can't be safely
