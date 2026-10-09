@@ -191,6 +191,22 @@ if printf '%s' "$dequoted" | awk '
   exit 0
 fi
 
+# Rule 8e — git grep's exec vector (`-O` / `--open-files-in-pager`). `git grep` is
+# allowlisted (Bash(git grep *)) as a read-only search; -O opens each match in a pager,
+# which runs an arbitrary command. Bound to the `git grep` segment (leader `git`,
+# subcommand `grep`) so a `curl -O` / `wget -O` elsewhere in the pipe doesn't trip it.
+# Read-mode git grep stays silent.
+if printf '%s' "$dequoted" | awk '
+    { s=$0; gsub(/\|\||&&/,"\n",s); gsub(/[|;()]/,"\n",s); print s }
+  ' | awk '
+    { a=""; b=""; for (i=1; i<=NF; i++) if ($i!="") { if (a=="") a=$i; else { b=$i; break } }
+      if (a=="git" && b=="grep") for (i=1; i<=NF; i++) if ($i ~ /^-O/ || $i ~ /^--open-files-in-pager/) found=1 }
+    END { exit found?0:1 }
+  '; then
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"git grep -O / --open-files-in-pager opens matches in a pager, which runs an arbitrary command. git grep is allowlisted as a read-only search, so this hook forces a confirmation on the pager/exec mode."}}'
+  exit 0
+fi
+
 # Rule 2 — chained search plumbing: a grep/find/rg piped or command-substituted.
 # A bare grep/find/rg (even after `cd … &&`) is fine — that's the native search path.
 if printf '%s\n' "$leaders" | grep -qxE 'grep|egrep|fgrep|rg|find'; then
