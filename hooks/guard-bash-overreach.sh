@@ -174,15 +174,19 @@ firstleader="$(printf '%s\n' "$leaders" | sed -n '1p')"
 
 # Rule 8d — sort's write vector (`-o` / `--output=FILE`). `sort` is allowlisted
 # (Bash(sort *)) as a read tool so tallies run prompt-free; the write mode must not
-# ride that broad allow silently. Force a confirmation (ask) when a `sort` leader
-# carries -o/--output — giving sort a clean read-only boundary the allowlist can't
-# express. Leader-bound for `sort`, but the flag check spans the command, so an
-# unrelated `-o` on another tool in the same pipe (ls -o, find -o) can also trip the
-# ask — rare, and it only prompts, never blocks. (uniq's write is a bare 2nd operand
-# with no flag — not reliably detectable without parsing its value flags, so it's
-# left to CC's own handling rather than guessed at here.)
-if printf '%s\n' "$leaders" | grep -qx 'sort' \
-   && printf '%s' "$dequoted" | grep -Eq '(^|[[:space:]])(-o|--output)([[:space:]]|=|$)'; then
+# ride that broad allow silently. The output flag is checked ONLY in the `sort`
+# segment — split on pipe/;/&&/subshell, and a segment gates only when its leader is
+# `sort` and it carries -o/--output. This is essential: a `rg -o`/`grep -o` earlier
+# in the SAME pipe (`rg -o … | sort | uniq -c | sort -n`) must NOT trip it — the -o
+# there is the search's, not sort's. (uniq's write is a bare 2nd operand with no
+# flag — not reliably detectable without parsing its value flags — left to CC.)
+if printf '%s' "$dequoted" | awk '
+    { s=$0; gsub(/\|\||&&/,"\n",s); gsub(/[|;()]/,"\n",s); print s }
+  ' | awk '
+    { lead=""; for (i=1; i<=NF; i++) if ($i!="") { lead=$i; break }
+      if (lead=="sort") for (i=2; i<=NF; i++) if ($i ~ /^--output/ || $i ~ /^-[a-zA-Z]*o/) found=1 }
+    END { exit found?0:1 }
+  '; then
   printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"sort -o / --output writes a file. sort is allowlisted as a read tool for prompt-free tallies, so this hook forces a confirmation on the write mode."}}'
   exit 0
 fi

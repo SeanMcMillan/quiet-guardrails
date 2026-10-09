@@ -145,6 +145,8 @@ expect_allow 'npm run build | grep -E error'                 # producer | termin
 expect_gate  'sort -o out.txt data.txt'                      # sort -o write vector (Rule 8d ask)
 expect_gate  'sort --output=out.txt data.txt'                # long form
 expect_allow 'sort -rn data.txt'                             # read-mode sort stays silent
+expect_allow 'rg -o foo src | sort | uniq -c | sort -n'      # rg -o must NOT trip the sort gate (segment-bound)
+expect_allow 'grep -o foo src | sort | uniq -c'              # grep -o likewise
 expect_block 'git diff --name-only -z | xargs -0 npx prettier --log-level warn --write src/x.ts' 'directly'  # Rule 2c
 expect_allow 'npx prettier --log-level warn --write src/x.ts'  # direct form passes
 expect_allow 'ls -la'
