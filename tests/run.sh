@@ -82,6 +82,8 @@ expect_gate_sub()  { runsub "$1"
 
 echo "== overreach rules (self-correct, exit 2) =="
 expect_block 'grep -rn foo src | head -5'      'wired into a pipe'
+expect_block 'grep foo src | xargs rm'         'wired into a pipe'   # search into plumbing/mutation
+expect_block 'rg foo src | grep bar'           'wired into a pipe'   # search into a second search
 expect_block 'cat notes.md'                    "'cat' in a Bash call"
 expect_block 'head -20 file.txt'               'to read a file'
 expect_block 'npm run test 2>&1 | tail -20'    'capping piped output'
@@ -98,6 +100,9 @@ expect_block 'GIT_WORK_TREE=/x git status'     'git pointed at another repo'
 expect_block 'find src/[locale] -name "*.tsx"' 'glob character'
 expect_block 'for f in a b; do echo $f; done'  'shell loop'
 expect_block 'python3 munge.py data.json'      'parsing JSON'
+expect_block "node -e \"const {spawnSync}=require('child_process'); spawnSync('tsc')\"" 'in the shell'  # Rule 1b orchestration
+expect_block "python3 -c \"import subprocess; subprocess.run(['tsc'])\""               'in the shell'
+expect_allow "node -e \"console.log(1 + 1)\""                                          # plain compute, no child process
 expect_block 'sed -i "s/a/b/" f'               'shell interpreter'
 expect_block 'sed -Ei "s/a/b/" f'              'shell interpreter'   # combined-flag fix (#6)
 expect_block 'perl -pi -e "s/a/b/" f'          'shell interpreter'   # perl -pi fix (#6)
@@ -134,6 +139,14 @@ expect_allow 'git log --oneline -20'
 expect_allow 'git branch --list'
 expect_allow 'grep -rn foo src'
 expect_allow 'grep -c foo src | wc -l'         # grep|wc count exemption
+expect_allow 'rg foo src | sort | uniq -c | sort -rn'        # rg aggregation tally (Rule 2 reducers)
+expect_allow 'npm run typecheck | rg foo | sort | uniq -c'   # producer | search | reducers
+expect_allow 'npm run build | grep -E error'                 # producer | terminal search
+expect_gate  'sort -o out.txt data.txt'                      # sort -o write vector (Rule 8d ask)
+expect_gate  'sort --output=out.txt data.txt'                # long form
+expect_allow 'sort -rn data.txt'                             # read-mode sort stays silent
+expect_block 'git diff --name-only -z | xargs -0 npx prettier --log-level warn --write src/x.ts' 'directly'  # Rule 2c
+expect_allow 'npx prettier --log-level warn --write src/x.ts'  # direct form passes
 expect_allow 'ls -la'
 
 echo "== Rule 10 — raw/npx tool with a wrapping package.json (cwd-aware) =="
@@ -150,6 +163,12 @@ expect_block 'git --no-pager log --oneline -20'          'no-ops under capture'
 expect_block 'git -c color.ui=never diff origin/develop...HEAD --stat -- f' 'no-ops under capture'  # color disabler
 expect_block 'git --no-color log --oneline -5'           'no-ops under capture'
 expect_gate  'git -c core.pager=cat commit -m wip'       # mutation still gates first (Rule 8b), not corrected
+
+echo "== Rule 8c — git branch --format/--sort redirected to git for-each-ref =="
+expect_block "git branch -a --sort=-committerdate --format='%(refname:short)'" 'for-each-ref'
+expect_allow "git for-each-ref --sort=-committerdate --format='%(refname:short)' refs/heads"  # approved target not caught
+expect_allow 'git branch'                                # plain listing not redirected
+expect_gate  'git branch -D oldbranch'                   # mutating branch still gates (Rule 8), not redirected
 expect_allow 'git show f491d6c --stat --date=short'      # control: plain git show, no pager flag
 
 echo "== Rules 12/13/14 — gh read redirects (local git / Read / gh pr view; graphql & flag-order) =="

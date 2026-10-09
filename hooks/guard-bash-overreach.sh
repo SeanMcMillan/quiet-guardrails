@@ -148,6 +148,20 @@ if printf '%s' "$cmd" | grep -Eq '(^|[^[:alnum:]_])python3?([^[:alnum:]_]|$)' \
   fi
 fi
 
+# Rule 1b — orchestrating SHELL commands inside node/python `-e`/`-c`/`-p` (child_process
+# / spawnSync / subprocess / os.system). This is a normal "run a command and filter its
+# output" goal rewritten as arbitrary JS/Python — which prompts (arbitrary code) and is
+# a worse tool than the shell. Run the command directly and filter with a pipe
+# (rg/grep/jq), which the allowlist + Rule 2 now pass. Uses $cmd so the quoted -e body
+# is seen. Plain compute (`node -e "1+1"`) has no child-process call and isn't flagged.
+if { printf '%s' "$cmd" | grep -Eq 'node[[:space:]]+(-e|-p|--eval)' \
+     && printf '%s' "$cmd" | grep -Eq 'child_process|spawnSync|execSync|[^a-zA-Z](spawn|exec)\('; } \
+   || { printf '%s' "$cmd" | grep -Eq 'python3?[[:space:]]+(-c|-)([[:space:]]|$)' \
+        && printf '%s' "$cmd" | grep -Eq 'subprocess|os\.system|os\.popen|check_output|Popen'; }; then
+  echo "Overreach: orchestrating shell commands inside node/python -e (child_process / spawnSync / subprocess) — a normal 'run a command and filter its output' goal rewritten as arbitrary code, which prompts. Run the command directly in the shell and filter with a pipe: e.g. npm run typecheck -- --pretty false 2>&1 | rg 'pattern' (allowlisted). Use jq for JSON, rg/grep for text — not an interpreter subprocess." >&2
+  exit 2
+fi
+
 # Leading command of every segment (split on \n ; | && || $( () and backticks).
 # `()` are split too so a subshell — `(cd x && git status)` — yields the bare
 # leaders `cd`/`git` rather than `(cd`, and Rule 6 still catches the bundle.
@@ -158,24 +172,58 @@ leaders="$(printf '%s' "$scan" | awk '
 ')"
 firstleader="$(printf '%s\n' "$leaders" | sed -n '1p')"
 
-# Rule 2 — chained search plumbing: a grep/find piped or command-substituted.
-# A bare grep/find (even after `cd … &&`) is fine — that's the native search path.
-if printf '%s\n' "$leaders" | grep -qxE 'grep|egrep|fgrep|find'; then
+# Rule 8d — sort's write vector (`-o` / `--output=FILE`). `sort` is allowlisted
+# (Bash(sort *)) as a read tool so tallies run prompt-free; the write mode must not
+# ride that broad allow silently. Force a confirmation (ask) when a `sort` leader
+# carries -o/--output — giving sort a clean read-only boundary the allowlist can't
+# express. Leader-bound for `sort`, but the flag check spans the command, so an
+# unrelated `-o` on another tool in the same pipe (ls -o, find -o) can also trip the
+# ask — rare, and it only prompts, never blocks. (uniq's write is a bare 2nd operand
+# with no flag — not reliably detectable without parsing its value flags, so it's
+# left to CC's own handling rather than guessed at here.)
+if printf '%s\n' "$leaders" | grep -qx 'sort' \
+   && printf '%s' "$dequoted" | grep -Eq '(^|[[:space:]])(-o|--output)([[:space:]]|=|$)'; then
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"sort -o / --output writes a file. sort is allowlisted as a read tool for prompt-free tallies, so this hook forces a confirmation on the write mode."}}'
+  exit 0
+fi
+
+# Rule 2 — chained search plumbing: a grep/find/rg piped or command-substituted.
+# A bare grep/find/rg (even after `cd … &&`) is fine — that's the native search path.
+if printf '%s\n' "$leaders" | grep -qxE 'grep|egrep|fgrep|rg|find'; then
   if printf '%s' "$scan" | grep -Eq '[|]|[$][(]'; then
-    # Exception: a terminal count 'grep/find … | wc' (single pipe into wc, nothing
-    # further) — wc is a scalar reducer, not chained plumbing, and there's no bare
-    # grep/find flag for a cross-file total count.
-    secondleader="$(printf '%s\n' "$leaders" | sed -n '2p')"
-    nleaders="$(printf '%s\n' "$leaders" | grep -c .)"
-    if [ "$nleaders" = "2" ] && [ "$secondleader" = "wc" ] \
-       && printf '%s' "$firstleader" | grep -qxE 'grep|egrep|fgrep|find' \
+    # Exception: the search feeds only pure REDUCERS (wc / sort / uniq, any order or
+    # count) or nothing further — e.g. `rg X | sort | uniq -c | sort -rn`, or an
+    # upstream producer first like `npm run typecheck | rg X | sort | uniq -c`. What
+    # matters is what consumes the SEARCH's output: reducers count/order/dedupe, they
+    # don't act on the system, cap silently (head/tail), or feed another search — so
+    # it's allowed, the same spirit as the original `| wc` carve-out. An upstream
+    # producer (npm/git/…) is just the search's input and is governed by its own
+    # rules. Anything downstream of the search that isn't a reducer (xargs, head/tail,
+    # a second grep, a mutation) is plumbing and still blocks.
+    srchnum="$(printf '%s\n' "$leaders" | grep -nxE 'grep|egrep|fgrep|rg|find' | sed -n '1p')"
+    srchnum="${srchnum%%:*}"
+    after="$(printf '%s\n' "$leaders" | sed -n "$((srchnum + 1)),\$p")"
+    if [ -n "$srchnum" ] \
+       && { [ -z "$after" ] || ! printf '%s\n' "$after" | grep -qvxE 'wc|sort|uniq'; } \
        && ! printf '%s' "$scan" | grep -Eq '[$][(]|;|&&|[|][|]'; then
-      : # terminal 'grep/find | wc' count — allowed
+      : # search output consumed only by reducers (or terminal) — allowed
     else
-      echo "Overreach: a grep/find wired into a pipe or \$(...). Run the search as its own Bash call and act on the result in a separate step. (Exception: a terminal count '… | wc -l' is fine. Bare 'grep'/'rg'/'find' are fine — this native build's grep is ugrep.)" >&2
+      echo "Overreach: a grep/find/rg wired into a pipe or \$(...). Run the search as its own Bash call and act on the result in a separate step. (Exception: a terminal count/tally into wc/sort/uniq — e.g. '… | sort | uniq -c | sort -rn' — is fine. Bare 'grep'/'rg'/'find' are fine — this native build's grep is ugrep.)" >&2
       exit 2
     fi
   fi
+fi
+
+# Rule 2c — prettier run through xargs/git-diff plumbing instead of directly. The
+# project's prettier IS allowlisted as `npx prettier --log-level warn *`, so a direct
+# `npx prettier --log-level warn --write <files>` is prompt-free; wrapping it in
+# `git diff … | xargs … prettier` makes the segment leader `xargs` (not allowlisted),
+# so a totally normal format prompts for no reason. The agent knows which files it
+# changed — pass them. Redirect to the direct, allowlisted form. (Matches prettier
+# bound as xargs's command, so `rg prettier … | xargs rm` doesn't trip it.)
+if printf '%s' "$dequoted" | grep -Eq 'xargs[^|;&]*prettier'; then
+  echo "Overreach: running prettier through xargs/git-diff plumbing — the segment leader becomes xargs, which isn't allowlisted, so a normal format prompts. Run it directly on the files you changed: npx prettier --log-level warn --write <files> (that form IS allowlisted and prompt-free). Don't reconstruct the changed-file set via 'git diff | xargs'." >&2
+  exit 2
 fi
 
 # Rule 3 — reading a file: cat (anywhere), or a leading head/tail. Use the Read tool.
@@ -278,6 +326,19 @@ fi
 # (Rule 8/8b), so `git -c core.pager=cat commit` still asks, not this.
 if printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])git[[:space:]].*(--no-pager|--no-color|core\.pager=|color\.[a-z.]+=)'; then
   echo "Overreach: a cosmetic git flag that no-ops under capture (--no-pager / -c core.pager=…, or --no-color / -c color.ui=…). Claude Code's Bash tool captures git's output (no TTY), so git already paginates nothing and emits no color — the flag does nothing here, and putting it before the subcommand shifts the token so a read-only 'git show/log/diff' no longer matches the allowlist and prompts. Drop it and run plain git." >&2
+  exit 2
+fi
+
+# Rule 8c — `git branch` used for read-only LISTING (`--format`/`--sort`). git branch
+# is dual-use (it also deletes/renames: -D/--delete/-m/--force), so Claude Code won't
+# auto-approve it and a blanket `git branch *` allow would admit the destructive forms.
+# The porcelain `--format`/`--sort` listing is exactly `git for-each-ref`, which has no
+# mutating form (no --exec; --format is in-process string interpolation, not a per-ref
+# subprocess) and so is safe to allowlist. Mutating `git branch` is gated earlier
+# (Rule 8), before this. The space-before-`branch` match avoids a ref named `*-branch`.
+if printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])git[[:space:]]([^|&;]*[[:space:]])?branch([[:space:]]|$)' \
+   && printf '%s' "$scan" | grep -Eq '(--format|--sort)'; then
+  echo "Overreach: git branch with --format/--sort is read-only listing, but git branch is dual-use (it also deletes/renames: -D / --delete / -m), so Claude Code gates it and a blanket 'git branch *' allow would admit the destructive forms. Use git for-each-ref instead — no mutating form, safe to allowlist, same output: git for-each-ref --sort=-committerdate --format='%(refname:short) %(committerdate:short) %(subject)' refs/heads refs/remotes" >&2
   exit 2
 fi
 

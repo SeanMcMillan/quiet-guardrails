@@ -13,6 +13,7 @@
       "Bash(git diff *)",
       "Bash(git show *)",
       "Bash(git log *)",
+      "Bash(git for-each-ref *)",
       "Bash(git ls-tree *)",
       "Bash(git check-ignore *)",
       "Bash(gh pr view *)",
