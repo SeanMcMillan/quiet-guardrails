@@ -318,6 +318,22 @@ if printf '%s\n' "$leaders" | grep -qx 'find' \
   exit 2
 fi
 
+# Rule 8f — read-only `git -C <path> <sub>` auto-approve (positive allow). The
+# sanctioned cross-repo read — show/log/diff/status/for-each-ref/ls-tree/fetch with the
+# subcommand IMMEDIATELY after the single path token — is safe and common, so allow it
+# outright: prompt-free for ANY path, in main AND subagents, with no broad `git -C *`
+# allow rule (which would let an injected global -c/--exec-path through) and no per-repo
+# allowlist upkeep. An injected flag (`git -C /p -c core.pager=… log`) puts a non-subcmd
+# right after the path, so it does NOT match and falls through to Rule 9 / the mutation
+# gates. NOTE this trusts the destination repo's config (fsmonitor/textconv/diff.external
+# can run on a read) — fine for local checkouts you control, and git's default
+# safe.directory refuses repos owned by another user. `fetch` is the one non-read
+# (updates remote-tracking refs, non-destructive), included for the cross-repo PR-diff flow.
+if printf '%s' "$dequoted" | grep -Eq '(^|[^[:alnum:]_])git[[:space:]]+-C[[:space:]]+[^[:space:]]+[[:space:]]+(show|log|diff|status|for-each-ref|ls-tree|fetch)([[:space:]]|$)'; then
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"read-only git -C <path> <show/log/diff/status/for-each-ref/ls-tree/fetch> — the sanctioned cross-repo read, auto-approved. An injected global -c/--exec-path between path and subcommand would not match this and still prompts."}}'
+  exit 0
+fi
+
 # Rule 9 — git pointed at another repo, by flag OR environment variable: the flags
 # `-C <path>` / `--git-dir=<path>` / `--work-tree=<path>`, and the env vars
 # `GIT_DIR=` / `GIT_WORK_TREE=`. Each relocates git and shifts the subcommand token
@@ -326,13 +342,10 @@ fi
 # right after `git` (so `git log -C` copy-detection is untouched); the env-var match
 # needs an assignment (`GIT_DIR=`), so a bare `$GIT_DIR` reference is left alone. Skipped
 # in a subagent — there the relocation flags are the cwd-INDEPENDENT way to reach another
-# repo (a standalone `cd` can't persist), so they're the fix, not the mistake.
-# ALSO skipped for read-only `git -C <path> <readsubcmd> …` (show/log/diff/status/
-# for-each-ref/ls-tree with an arg): those are allowlisted (Bash(git -C * <sub> *)) as
-# the sanctioned cross-repo read — prompt-free in main AND subagents, no cd dance —
-# while mutations through -C still gate (Rule 8/8b) and other -C forms still redirect.
+# repo (a standalone `cd` can't persist), so they're the fix, not the mistake. (Read
+# `git -C <path> <readsub>` is auto-approved earlier by Rule 8f, so it never reaches here;
+# what Rule 9 still catches is non-read -C forms, --git-dir/--work-tree, and the env vars.)
 if [ -z "$is_subagent" ] \
-   && ! printf '%s' "$dequoted" | grep -Eq 'git[[:space:]]+-C[[:space:]]+[^[:space:]]+[[:space:]]+(show|log|diff|status|for-each-ref|ls-tree)[[:space:]]' \
    && { printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])git[[:space:]]+(-C|--git-dir|--work-tree)([[:space:]=]|$)' \
         || printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])(GIT_DIR|GIT_WORK_TREE)='; }; then
   echo "Overreach: git pointed at another repo — via a repo-location flag ('-C <path>', '--git-dir=', '--work-tree=') or an env var ('GIT_DIR=', 'GIT_WORK_TREE='). Either shifts the subcommand token, so even a read-only git prompts. Same repo? drop it and run plain git (e.g. 'git status --short --branch'). A DIFFERENT repo? use a standalone 'cd <path>' then plain git — cd into a working/additional dir auto-approves. Not sure where you are? run 'pwd' first." >&2

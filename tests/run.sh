@@ -79,6 +79,12 @@ expect_allow_sub() { runsub "$1"
 expect_gate_sub()  { runsub "$1"
   if [ "$code" -eq 0 ] && printf '%s' "$out" | grep -q '"permissionDecision":"ask"'; then ok
   else bad "gate(subagent): $1" "want ask JSON; got code=$code out=[$out]"; fi; }
+expect_allow_json()     { run "$1"
+  if [ "$code" -eq 0 ] && printf '%s' "$out" | grep -q '"permissionDecision":"allow"'; then ok
+  else bad "allow-json: $1" "want allow JSON; got code=$code out=[$out]"; fi; }
+expect_allow_json_sub() { runsub "$1"
+  if [ "$code" -eq 0 ] && printf '%s' "$out" | grep -q '"permissionDecision":"allow"'; then ok
+  else bad "allow-json(subagent): $1" "want allow JSON; got code=$code out=[$out]"; fi; }
 
 echo "== overreach rules (self-correct, exit 2) =="
 expect_block 'grep -rn foo src | head -5'      'wired into a pipe'
@@ -91,16 +97,20 @@ expect_block 'npm run build 2>&1'              'stream-merge'
 expect_block 'ls; echo done'                   "chained 'echo'"
 expect_block 'cd myrepo && git status'         'bundled in one command'
 expect_block '(cd /x && git status)'           'bundled in one command'   # subshell-wrapped cd+git still caught
-expect_block 'git -C /tmp/x status'            'git pointed at another repo'
+expect_allow_json 'git -C /tmp/x status'                      # read git -C auto-approved (Rule 8f)
 expect_block 'git -C /repo branch --list'      'git pointed at another repo'   # branch/-C collision -> corrector, not gate
 expect_block 'git --git-dir=/x/.git --work-tree=/x status --short --branch' 'git pointed at another repo'
 expect_block 'git --work-tree=/x status'       'git pointed at another repo'
 expect_block 'GIT_DIR=/x/.git GIT_WORK_TREE=/x git status --short --branch' 'git pointed at another repo'
 expect_block 'GIT_WORK_TREE=/x git status'     'git pointed at another repo'
-expect_allow 'git -C /x log --oneline -6'      # read-only git -C <sub> ARG — Rule 9 skips, allowlisted (main)
-expect_allow 'git -C /x show 9764edc'
-expect_allow 'git -C /x status --short'        # status WITH an arg skips; bare 'git -C /x status' (above) still redirects
-expect_allow 'git -C /x diff HEAD~1'           # diff with arg skips; 'difftool' would not
+expect_allow_json 'git -C /x log --oneline -6' # read git -C auto-approved (Rule 8f), any path
+expect_allow_json 'git -C /x show 9764edc'
+expect_allow_json 'git -C /x status --short'
+expect_allow_json 'git -C /x diff HEAD~1'
+expect_allow_json 'git -C /x fetch origin pull/486/head'  # fetch (non-destructive) auto-approved
+expect_allow_json 'git -C /x fetch'            # bare fetch too
+expect_block 'git -C /x difftool HEAD'         'git pointed at another repo'   # difftool (exec) NOT matched by 8f -> redirects
+expect_block 'git -C /x --exec-path=/evil log' 'git pointed at another repo'   # injected global flag between path and sub -> NOT auto-approved
 expect_block 'find src/[locale] -name "*.tsx"' 'glob character'
 expect_block 'for f in a b; do echo $f; done'  'shell loop'
 expect_block 'python3 munge.py data.json'      'parsing JSON'
@@ -223,11 +233,12 @@ expect_allow_w '/private/tmp/claude-501/x/scratchpad/analyze.ts'    # non-test s
 
 echo "== subagent carve-out — cd/relocation correctors skip when agent_id is present =="
 expect_allow_sub 'cd /x && git status'                          # Rule 6 skipped: cd&&git in one call is a subagent's working form
-expect_allow_sub 'git -C /x status'                             # Rule 9 skipped: repo-scoped flag is cwd-independent
+expect_allow_json_sub 'git -C /x status'                        # read git -C auto-approved (Rule 8f), not just carve-out
 expect_allow_sub 'git --git-dir=/x/.git --work-tree=/x status'  # Rule 9 skipped
 expect_allow_sub 'GIT_DIR=/x/.git git status'                   # Rule 9 skipped (env-var form)
 expect_gate_sub  'git -C /x add .'                              # mutation gate (8b) STILL fires in a subagent — carve-out opened no hole
-expect_allow_sub 'git -C /x log --oneline -6'                   # cross-repo read in a subagent: carve-out + allowlist, prompt-free
+expect_allow_json_sub 'git -C /x log --oneline -6'              # read git -C auto-approved in a subagent (Rule 8f)
+expect_allow_json_sub 'git -C /x fetch origin main'
 # (the same relocation/cd commands WITHOUT agent_id still block — see the Rule 6 / Rule 9 cases above)
 
 echo
