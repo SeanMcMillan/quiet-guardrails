@@ -327,7 +327,12 @@ fi
 # needs an assignment (`GIT_DIR=`), so a bare `$GIT_DIR` reference is left alone. Skipped
 # in a subagent — there the relocation flags are the cwd-INDEPENDENT way to reach another
 # repo (a standalone `cd` can't persist), so they're the fix, not the mistake.
+# ALSO skipped for read-only `git -C <path> <readsubcmd> …` (show/log/diff/status/
+# for-each-ref/ls-tree with an arg): those are allowlisted (Bash(git -C * <sub> *)) as
+# the sanctioned cross-repo read — prompt-free in main AND subagents, no cd dance —
+# while mutations through -C still gate (Rule 8/8b) and other -C forms still redirect.
 if [ -z "$is_subagent" ] \
+   && ! printf '%s' "$dequoted" | grep -Eq 'git[[:space:]]+-C[[:space:]]+[^[:space:]]+[[:space:]]+(show|log|diff|status|for-each-ref|ls-tree)[[:space:]]' \
    && { printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])git[[:space:]]+(-C|--git-dir|--work-tree)([[:space:]=]|$)' \
         || printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])(GIT_DIR|GIT_WORK_TREE)='; }; then
   echo "Overreach: git pointed at another repo — via a repo-location flag ('-C <path>', '--git-dir=', '--work-tree=') or an env var ('GIT_DIR=', 'GIT_WORK_TREE='). Either shifts the subcommand token, so even a read-only git prompts. Same repo? drop it and run plain git (e.g. 'git status --short --branch'). A DIFFERENT repo? use a standalone 'cd <path>' then plain git — cd into a working/additional dir auto-approves. Not sure where you are? run 'pwd' first." >&2
@@ -452,8 +457,8 @@ fi
 # checkout: diffs/commits via plain git, a file's content via the Read tool. Assumes
 # the repo is checked out locally; one `git fetch` covers a missing ref.
 if printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+pr[[:space:]]+diff([[:space:]]|$)' \
-   || printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+api[[:space:]][^;|&]*(commits/|compare/|contents/)'; then
-  echo "Overreach: reading repo content through gh (gh pr diff, or gh api …/commits|compare|contents). Those hit the API and prompt; it's all in your local checkout. For a diff or commit, use plain git — 'git show <sha>', 'git log <a>..<b>', 'git diff <a>...<b>' (read-only, whitelist-passing; 'git fetch' first if the ref is missing). For a file's content, Read it from the checkout, or 'git show <ref>:<path>' for a specific ref." >&2
+   || printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+api[[:space:]][^;|&]*(commits/|compare/|contents/|pulls/[^;|&]*files)'; then
+  echo "Overreach: reading repo content through gh (gh pr diff, or gh api …/commits|compare|contents|pulls/<n>/files). Those hit the API and prompt; it's all in your local checkout. For a diff or commit, use plain git — 'git show <sha>', 'git log <a>..<b>', 'git diff <a>...<b>' (read-only, whitelist-passing; 'git fetch' first if the ref is missing). For a PR's changed files, fetch and diff locally — 'git fetch origin pull/<n>/head' then 'git diff <base>...FETCH_HEAD -- <paths>' (a sibling repo: 'git -C <path> …', now allowlisted). For a file's content, Read it from the checkout, or 'git show <ref>:<path>' for a specific ref." >&2
   exit 2
 fi
 

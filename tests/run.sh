@@ -97,6 +97,10 @@ expect_block 'git --git-dir=/x/.git --work-tree=/x status --short --branch' 'git
 expect_block 'git --work-tree=/x status'       'git pointed at another repo'
 expect_block 'GIT_DIR=/x/.git GIT_WORK_TREE=/x git status --short --branch' 'git pointed at another repo'
 expect_block 'GIT_WORK_TREE=/x git status'     'git pointed at another repo'
+expect_allow 'git -C /x log --oneline -6'      # read-only git -C <sub> ARG — Rule 9 skips, allowlisted (main)
+expect_allow 'git -C /x show 9764edc'
+expect_allow 'git -C /x status --short'        # status WITH an arg skips; bare 'git -C /x status' (above) still redirects
+expect_allow 'git -C /x diff HEAD~1'           # diff with arg skips; 'difftool' would not
 expect_block 'find src/[locale] -name "*.tsx"' 'glob character'
 expect_block 'for f in a b; do echo $f; done'  'shell loop'
 expect_block 'python3 munge.py data.json'      'parsing JSON'
@@ -181,7 +185,8 @@ expect_block 'gh pr diff 42'                            'reading repo content th
 expect_block 'gh api repos/o/r/commits/abc123'          'reading repo content through gh'
 expect_block 'gh api repos/o/r/compare/main...feature'  'reading repo content through gh'
 expect_block 'gh api repos/o/r/contents/sections/x.yml?ref=main' 'reading repo content through gh'
-expect_block 'gh api repos/o/r/pulls/42/comments'       'reading PR comments'
+expect_block "gh api repos/o/r/pulls/486/files --paginate --jq '.[]'" 'reading repo content through gh'  # Rule 12 PR files
+expect_block 'gh api repos/o/r/pulls/42/comments'       'reading PR comments'   # still routes to Rule 13, not 12
 expect_block 'gh --repo o/r pr view 196 --json title'   'flag placed before the subcommand'
 expect_allow "gh api graphql -f query='{ reviewThreads }'"  # inline threads: no read-only equivalent, must NOT be flagged
 expect_allow 'gh pr view 42 --comments'                 # correct form: read-only, whitelistable
@@ -222,6 +227,7 @@ expect_allow_sub 'git -C /x status'                             # Rule 9 skipped
 expect_allow_sub 'git --git-dir=/x/.git --work-tree=/x status'  # Rule 9 skipped
 expect_allow_sub 'GIT_DIR=/x/.git git status'                   # Rule 9 skipped (env-var form)
 expect_gate_sub  'git -C /x add .'                              # mutation gate (8b) STILL fires in a subagent — carve-out opened no hole
+expect_allow_sub 'git -C /x log --oneline -6'                   # cross-repo read in a subagent: carve-out + allowlist, prompt-free
 # (the same relocation/cd commands WITHOUT agent_id still block — see the Rule 6 / Rule 9 cases above)
 
 echo
