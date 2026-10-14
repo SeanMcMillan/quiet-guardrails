@@ -334,6 +334,21 @@ if printf '%s' "$dequoted" | grep -Eq '(^|[^[:alnum:]_])git[[:space:]]+-C[[:spac
   exit 0
 fi
 
+# Rule 8g — read-only `git -C <path> branch <listing>` auto-approve. `branch` is NOT in
+# Rule 8f's always-read set because it is dual-use (it also creates/deletes/renames), so
+# the listing form (`branch -a --list "*1403*"`, `branch -r`, bare `branch`) still prompts
+# via git -C. It is safe to allow here because the mutating-flag forms were already
+# intercepted by Rule 8 ABOVE (it scans every arg after `branch` for -d/-D/-f/-m/-M/-c/-C
+# and forces an ask), so anything reaching this line has no mutating flag. The regex adds
+# a second guard: the first token after `branch` must be a known read-only flag, so
+# bare-name creation (`git branch foo`) and upstream edits (`-u`, `--set-upstream-to`),
+# which Rule 8 does not list, do NOT match and keep prompting. Same path/injection safety
+# as 8f: subcommand immediately after the single path token, so an injected -c won't match.
+if printf '%s' "$dequoted" | grep -Eq '(^|[^[:alnum:]_])git[[:space:]]+-C[[:space:]]+[^[:space:]]+[[:space:]]+branch([[:space:]]+(-a|-r|-l|-v|-vv|--all|--remotes|--list|--verbose|--show-current|--contains|--no-contains|--merged|--no-merged|--points-at|--format|--sort|--color|--no-color)([[:space:]=]|$)|[[:space:]]*$)'; then
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"read-only git -C <path> branch listing (-a/-r/-l/--list/--show-current/etc.) — a cross-repo read. Mutating branch forms are gated by the ask above and never reach here; bare-name create and upstream edits are not read-only flags, so they still prompt."}}'
+  exit 0
+fi
+
 # Rule 9 — git pointed at another repo, by flag OR environment variable: the flags
 # `-C <path>` / `--git-dir=<path>` / `--work-tree=<path>`, and the env vars
 # `GIT_DIR=` / `GIT_WORK_TREE=`. Each relocates git and shifts the subcommand token
@@ -472,6 +487,16 @@ fi
 if printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+pr[[:space:]]+diff([[:space:]]|$)' \
    || printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+api[[:space:]][^;|&]*(commits/|compare/|contents/|pulls/[^;|&]*files)'; then
   echo "Overreach: reading repo content through gh (gh pr diff, or gh api …/commits|compare|contents|pulls/<n>/files). Those hit the API and prompt; it's all in your local checkout. For a diff or commit, use plain git — 'git show <sha>', 'git log <a>..<b>', 'git diff <a>...<b>' (read-only, whitelist-passing; 'git fetch' first if the ref is missing). For a PR's changed files, fetch and diff locally — 'git fetch origin pull/<n>/head' then 'git diff <base>...FETCH_HEAD -- <paths>' (a sibling repo: 'git -C <path> …', now allowlisted). For a file's content, Read it from the checkout, or 'git show <ref>:<path>' for a specific ref." >&2
+  exit 2
+fi
+
+# Rule 12b — computing a merge-base via command substitution ($(git merge-base …)) to
+# feed a diff/log range. CC can't check $(...) output in advance, so it prompts. Git's
+# range syntax takes the merge-base natively with no substitution: `A...B` (three dots)
+# diffs/logs from the merge-base of A and B. Redirect to that. Uses $cmd so the raw
+# $( ) is seen (it isn't a quoted span, so $scan keeps it, but $cmd is unambiguous).
+if printf '%s' "$cmd" | grep -Eq '\$\(git[[:space:]]+merge-base'; then
+  echo "Overreach: computing a merge-base with command substitution (\$(git merge-base …)) — CC can't check \$(...) output in advance, so it prompts. Use git's range syntax, which takes the merge-base natively with no \$(): 'git diff <base>...HEAD --stat' or 'git log <base>...HEAD' (three dots = since the merge-base). Note 'git diff A...B' is COMMITTED changes since the branch point; for uncommitted too, add a plain 'git diff'." >&2
   exit 2
 fi
 

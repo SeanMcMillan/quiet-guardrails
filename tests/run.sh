@@ -98,7 +98,13 @@ expect_block 'ls; echo done'                   "chained 'echo'"
 expect_block 'cd myrepo && git status'         'bundled in one command'
 expect_block '(cd /x && git status)'           'bundled in one command'   # subshell-wrapped cd+git still caught
 expect_allow_json 'git -C /tmp/x status'                      # read git -C auto-approved (Rule 8f)
-expect_block 'git -C /repo branch --list'      'git pointed at another repo'   # branch/-C collision -> corrector, not gate
+expect_allow_json 'git -C /repo branch --list'               # read-only branch listing via git -C (Rule 8g)
+expect_allow_json 'git -C /x branch -a --list "*1403*"'      # the real incident: -a + --list + glob pattern
+expect_allow_json 'git -C /x branch'                         # bare branch (lists) too
+expect_allow_json 'git -C /x branch -r'
+expect_gate 'git -C /x branch -D oldfeature'                 # mutating branch gated by Rule 8 ask BEFORE 8g, even via -C
+expect_block 'git -C /x branch newfeature'     'git pointed at another repo'   # bare-name CREATE is not a read flag -> still redirects
+expect_block 'git -C /x branch --set-upstream-to=origin/x' 'git pointed at another repo'  # upstream edit not a read flag -> still redirects
 expect_block 'git --git-dir=/x/.git --work-tree=/x status --short --branch' 'git pointed at another repo'
 expect_block 'git --work-tree=/x status'       'git pointed at another repo'
 expect_block 'GIT_DIR=/x/.git GIT_WORK_TREE=/x git status --short --branch' 'git pointed at another repo'
@@ -199,6 +205,8 @@ expect_block "gh api repos/o/r/pulls/486/files --paginate --jq '.[]'" 'reading r
 expect_block 'gh api repos/o/r/pulls/42/comments'       'reading PR comments'   # still routes to Rule 13, not 12
 expect_block 'gh --repo o/r pr view 196 --json title'   'flag placed before the subcommand'
 expect_allow "gh api graphql -f query='{ reviewThreads }'"  # inline threads: no read-only equivalent, must NOT be flagged
+expect_block 'git diff $(git merge-base origin/develop HEAD) --stat -- src'  'range syntax'  # Rule 12b: $(merge-base) -> A...B
+expect_allow 'git diff origin/develop...HEAD --stat -- src'   # the ... form passes (no command substitution)
 expect_allow 'gh pr view 42 --comments'                 # correct form: read-only, whitelistable
 expect_allow 'gh pr view 42 --json state,mergedAt'      # PR metadata via gh pr view is fine
 expect_allow 'gh pr view 196 --repo o/r --json title'  # Rule 14's target: --repo after the subcommand
@@ -239,6 +247,8 @@ expect_allow_sub 'GIT_DIR=/x/.git git status'                   # Rule 9 skipped
 expect_gate_sub  'git -C /x add .'                              # mutation gate (8b) STILL fires in a subagent — carve-out opened no hole
 expect_allow_json_sub 'git -C /x log --oneline -6'              # read git -C auto-approved in a subagent (Rule 8f)
 expect_allow_json_sub 'git -C /x fetch origin main'
+expect_allow_json_sub 'git -C /x branch -a --list "*1403*"'     # the real incident, in a subagent: read-only branch listing auto-approved (Rule 8g)
+expect_gate_sub  'git -C /x branch -D oldfeature'               # mutating branch still gated by Rule 8 ask in a subagent
 # (the same relocation/cd commands WITHOUT agent_id still block — see the Rule 6 / Rule 9 cases above)
 
 echo
