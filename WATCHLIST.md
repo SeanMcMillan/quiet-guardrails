@@ -61,6 +61,14 @@ An agent ran `cd <abspath> && npx prettier --version` — described as "confirm 
 
 - **Grindable?** Only a narrow slice: `npx <tool> --version|--help` is ceremony in a lockfile project (a tool's presence/version is in `package-lock.json`), so it *could* be corrected → "run it with `npm run <script>`; check location with `pwd`." But it's **one sample** — watch for recurrence before fitting a rule (a finding is a sample, not a population). The general "agent picked a weird probe" is not detectable.
 
+### Authenticated localhost curl probe (`-H @cookie-file` + quoted URL) prompts · seen 2026-10-15
+
+An agent ran an open-redirect probe: `curl -s -o /dev/null -w "%{http_code} %{redirect_url}\n" -H @<scratchpad>/cookie-header.txt "http://localhost:3000/%2Fevil.example/suppliers/xyz"` (sends the session cookie, tests an encoded-slash open redirect). Prompted — the allowlist entry `Bash(curl -s -o /dev/null -w * http://localhost:3000*)` doesn't match: the URL is **quoted** (`"http://…`, so the entry's ` http://localhost:3000` literal, which needs a space directly before `http`, fails) and there's a `-H @file` in between (CC may also gate `-H @file` on its own).
+
+- **Grindable → allowlist? No.** The `http://localhost:3000*` pin IS the exfil guard. Every glob tweak that absorbs the quote (e.g. `*http://localhost:3000*`) also matches `http://localhost:3000` as a *substring* of an external URL → curl-to-anywhere hole. A glob can't safely express "URL token pinned to localhost, quoted or not, with a header file" (same limitation that put `git -C` reads in a guard rule, not an allow entry).
+- **Grindable → guard allow (Rule-8f-style)? Possible but deferred.** A guard rule could parse it safely: curl, output discarded, no `-L` (can't follow a redirect outward), every URL token pinned to `http(s)://localhost:3000`, header files only from the scratchpad. Correct architecture, real new code.
+- **Decision (Sean, 2026-10-15): note-only / leave it prompting.** Rare — the agent only recently got cookie access for this kind of probe, and an authenticated crafted-payload probe is arguably deliberate enough to warrant a prompt (or `#override`). Revisit with the guard rule **only if it becomes common**. See [[authenticated-curl-via-agent-browser]].
+
 ### `printenv OBM_ROLE; ls …` — NOT a sketchy probe (corrected) · seen 2026-09-23
 
 First read as a fabricated-env-var probe; **wrong.** `OBM_ROLE` is the `obm:ticket-intake` plugin skill's documented lens selector, and `printenv OBM_ROLE` is the skill's own step (`~/.claude/plugins/cache/obm-ai-tooling/obm/*/skills/ticket-intake/SKILL.md:45`). The agent followed the skill; I asserted "invented" without reading it (see [[a-name-is-not-evidence]]). Only real observations:

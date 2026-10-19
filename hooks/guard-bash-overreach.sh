@@ -429,6 +429,53 @@ if [ -n "$t" ]; then
   fi
 fi
 
+# Rule 10b — prettier run raw/npx as a `--check` when a package.json script wraps the
+# check. `--check` is formatting VERIFICATION; the project's check script runs it across
+# the whole tree (= what CI runs) and is allowlisted (`npm run <script>`), whereas a
+# scoped raw `prettier --check <paths>` is not — and a quoted `[locale]`/`[product]` path
+# in it also trips Claude Code's bracket-glob gate. Redirect to the npm script. DYNAMIC +
+# de-personalized (own nearest package.json): fires ONLY if a script's body runs prettier
+# with --check, so it stays correct across repos. Kept separate from Rule 10 (not folded
+# into its tool list) on purpose: the scoped `--write` form is the project's allowlisted
+# pre-commit formatter and must NOT be redirected — only `--check` (verification) is.
+if { printf '%s\n' "$leaders" | grep -qx 'prettier' || printf '%s' "$scan" | grep -Eq 'npx[[:space:]]+prettier'; } \
+   && printf '%s' "$scan" | grep -Eq '(^|[[:space:]])--check([[:space:]]|=|$)'; then
+  pkgdir="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)"
+  [ -n "$pkgdir" ] || pkgdir="$PWD"
+  pkgjson=""
+  while :; do
+    if [ -f "$pkgdir/package.json" ]; then pkgjson="$pkgdir/package.json"; break; fi
+    parent="$(dirname "$pkgdir")"
+    [ "$parent" = "$pkgdir" ] && break
+    pkgdir="$parent"
+  done
+  if [ -n "$pkgjson" ]; then
+    checkscript="$(jq -r '[(.scripts // {} | to_entries[] | select((.value | test("prettier")) and (.value | test("--check"))) | .key)][0] // empty' "$pkgjson" 2>/dev/null)"
+    if [ -n "$checkscript" ]; then
+      echo "Overreach: verifying formatting with a raw/npx 'prettier --check <paths>'. The project wraps this as  npm run $checkscript  — the whole-repo check CI runs, allowlisted and prompt-free, where a scoped raw prettier --check is not (and a quoted [locale]/[product] path in it also trips Claude Code's bracket-glob gate). Use  npm run $checkscript . (To FIX formatting on specific files, scoped  npx prettier --log-level warn --write <files>  stays fine.)" >&2
+      exit 2
+    fi
+  fi
+fi
+
+# Rule 10c — a jest/coverage run with BRACE EXPANSION in a glob (e.g.
+# --collectCoverageFrom="src/{a,b}.ts" or "**/*.{ts,tsx}"). Claude Code gates brace
+# expansion {a,b} as a fail-safe, and it is QUOTE-BLIND — so even a brace quoted for
+# jest/micromatch (the shell never expands braces inside double quotes, so it is a literal
+# glob for jest, not shell expansion) still trips the gate and prompts, despite
+# `npm run test:coverage -- *` being allowlisted; the allowlist cannot suppress a fail-safe.
+# The brace-free equivalent is identical in scope AND prompt-free: extglob `*.ts?(x)` for
+# the .ts/.tsx pair, and one --collectCoverageFrom per comma-group instead of {a,b,c}.
+# (Quoted [locale]/[product] bracket paths do NOT trip the gate — verified — so only the
+# braces need rewriting.) Scoped to coverage/jest so ordinary brace uses elsewhere, which
+# the user may just want to approve, are not force-rewritten. Comma inside the braces is
+# required, so a single {x} (not an expansion) does not match.
+if printf '%s' "$scan" | grep -Eq 'collectCoverageFrom|test:coverage|(^|[^[:alnum:]_])jest([[:space:]]|$)' \
+   && printf '%s' "$cmd" | grep -Eq '\{[^{}]*,[^{}]*\}'; then
+  echo "Overreach: brace expansion ({a,b}) in a coverage glob. Claude Code gates brace expansion as a fail-safe, quote-blind — so even braces quoted for jest trip it and prompt, and the allowlist can't suppress that. Rewrite brace-free (same scope, prompt-free): use extglob  *.ts?(x)  instead of  *.{ts,tsx} , and pass ONE --collectCoverageFrom per path instead of  {a,b,c} . Quoted [locale]/[product] bracket paths are fine as-is." >&2
+  exit 2
+fi
+
 # Rule 11 — editing a file THROUGH a shell interpreter instead of the Edit/Write
 # tool: `sed -i` / `perl -i` (in-place), or a `node`/`python`/`perl` fed inline
 # code that writes a file — via `-e`/`-c`, via stdin `-`, or via a heredoc
@@ -462,6 +509,10 @@ fi
 # outside the working directory"), teaching nothing. Redirect to the canonical
 # absolute path. Uses $cmd so a quoted path is still seen; a relative `../sibling`
 # (no leading `/`) is left alone — only an absolute path that re-climbs matches.
+# (Verified 2026-10-14: CC's gate fires on INTERIOR relative `dir/..` too, e.g.
+# `src/../foo`, but NOT on a LEADING `../foo` — no directory segment precedes the `..`.
+# Leading `../` is thus correctly left alone; interior relative `dir/..` also prompts but
+# agents rarely emit it, so the rule is deliberately not widened for it.)
 if printf '%s' "$cmd" | grep -Eq '(^|[[:space:]])/[^[:space:]]*/\.\.(/|$|[[:space:]])'; then
   echo "Overreach: an absolute path with embedded ../ traversal (…/obm-rts-frontend/../../../private/tmp/…). It climbs out of the project and trips Claude Code's traversal gate. Write the canonical absolute path directly — the scratchpad is already absolute (/private/tmp/claude-…/…/scratchpad/…), no ../ needed — or use the Read tool with that path." >&2
   exit 2

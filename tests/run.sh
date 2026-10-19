@@ -18,7 +18,7 @@ FIXTURE="$(mktemp -d)"           # a fake repo for Rule 10 (package.json + a sub
 trap 'rm -rf "$HOME" "$FIXTURE"' EXIT
 mkdir -p "$HOME/.claude/hooks"   # let escape-log writes land where we can inspect them
 mkdir -p "$FIXTURE/sub"
-printf '%s\n' '{ "scripts": { "test": "jest --silent", "lint": "eslint --max-warnings=0 ." } }' > "$FIXTURE/package.json"
+printf '%s\n' '{ "scripts": { "test": "jest --silent", "lint": "eslint --max-warnings=0 .", "format": "prettier --log-level warn --write \"**/*.ts\"", "format:check": "prettier --log-level warn --check \"**/*.ts\"" } }' > "$FIXTURE/package.json"
 pass=0 fail=0
 
 run() { # $1 = command, $2 = optional payload cwd; sets $out $err $code
@@ -181,6 +181,20 @@ expect_block 'npx eslint .'          "running 'eslint' raw/npx" "$FIXTURE"
 expect_block 'npx jest --coverage x' "running 'jest' raw/npx"   "$FIXTURE"
 expect_block 'npx jest'              "running 'jest' raw/npx"   "$FIXTURE/sub"  # nearest package.json is one dir up
 expect_allow 'npx jest'              "$HOME"                                    # control: no wrapping script above -> passes
+
+echo "== Rule 10b — prettier --check redirected to the wrapping npm script =="
+expect_block 'npx prettier --check "src/app/[locale]/[product]" src/utils src/app/__tests__/auth.config.test.ts' 'npm run format:check' "$FIXTURE"  # the real incident
+expect_block 'npx prettier --log-level warn --check src/x.ts' 'npm run format:check' "$FIXTURE"  # even the "proper" scoped --check redirects to whole-repo
+expect_block 'prettier --check .'    'npm run format:check' "$FIXTURE"          # bare prettier --check too
+expect_allow 'npx prettier --log-level warn --write src/x.ts' "$FIXTURE"       # --write (scoped format) is NOT redirected — stays allowlisted
+expect_allow 'npx prettier --check src/x.ts' "$HOME"                           # control: no prettier --check script above -> doesn't fire
+
+echo "== Rule 10c — brace expansion in a coverage glob redirected to brace-free form =="
+expect_block 'npm run test:coverage -- --findRelatedTests "src/actions/auth.actions.ts" --collectCoverageFrom="src/{actions/auth.actions,proxy}.ts?(x)" --collectCoverageFrom="src/app/[locale]/[product]/**/*.{ts,tsx}"' 'brace expansion'  # the real incident
+expect_block 'npx jest --collectCoverageFrom="src/**/*.{ts,tsx}" --findRelatedTests src/x.ts' 'brace expansion'  # jest + {ts,tsx}
+expect_allow 'npm run test:coverage -- --findRelatedTests "src/app/[locale]/page.tsx"'  # no braces, quoted bracket path is fine
+expect_allow 'npm run test:coverage -- --collectCoverageFrom="src/{x}.ts"'              # single {x}, no comma -> not an expansion
+expect_allow 'mkdir -p "src/foo/{a,b,c}"'                                                # braces outside a coverage/jest context -> not force-rewritten
 
 echo "== Rule 9b — cosmetic git flag (pager/color) that no-ops under capture, breaks the allowlist =="
 expect_block 'git -c core.pager=cat show f491d6c --stat' 'no-ops under capture'
