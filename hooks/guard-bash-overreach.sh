@@ -476,6 +476,53 @@ if printf '%s' "$scan" | grep -Eq 'collectCoverageFrom|test:coverage|(^|[^[:alnu
   exit 2
 fi
 
+# Rule 10d — curl READ of the LOCAL app (positive allow). Checking status/redirects of local
+# routes and fetching server-rendered HTML with the browser's saved cookies is a sanctioned
+# same-machine probe. Allow it outright when it can neither exfil nor mutate: every http(s) URL
+# is localhost/127.0.0.1 (the HOST pin is the exfil guard — any PORT is still the same machine),
+# no -L/--location (so it can't FOLLOW an open-redirect outward — these probes test redirects),
+# no request body / upload / method override (read-only GET), no -O, any -o target is /dev/null
+# or scratch/tmp, and any -H @header-file is read from scratch/tmp. Anything else (external host,
+# -L, a body, output or header-file outside scratch) FALLS THROUGH to a normal prompt — not blocked.
+if printf '%s\n' "$leaders" | grep -qx 'curl' \
+   && printf '%s' "$cmd" | grep -Eqi 'https?://(localhost|127\.0\.0\.1)([:/]|$)'; then
+  curl_ok=yes
+  # any http(s) URL that is NOT localhost/127.0.0.1 -> not allowed
+  if printf '%s' "$cmd" | grep -Eoi 'https?://[^[:space:]"'"'"'`]+' | grep -Eqiv '^https?://(localhost|127\.0\.0\.1)([:/]|$)'; then curl_ok=no; fi
+  # no redirect-follow
+  if printf '%s' "$cmd" | grep -Eq '(^|[[:space:]])(-L|--location)([[:space:]]|$)'; then curl_ok=no; fi
+  # read-only GET: no body / form / upload / method override
+  if printf '%s' "$cmd" | grep -Eq '(^|[[:space:]])(-d|--data|--data-[a-z]+|-F|--form|-T|--upload-file|-X|--request)([[:space:]=]|$)'; then curl_ok=no; fi
+  # no remote-name write
+  if printf '%s' "$cmd" | grep -Eq '(^|[[:space:]])-O([[:space:]]|$)'; then curl_ok=no; fi
+  # every -o/--output target is /dev/null or scratch/tmp
+  for o in $(printf '%s' "$cmd" | grep -oE '(-o|--output)[[:space:]]+[^[:space:]]+' | sed -E 's/^(-o|--output)[[:space:]]+//'); do
+    case "$o" in /dev/null|*scratchpad*|*/tmp/*|*/private/tmp/*) : ;; *) curl_ok=no ;; esac
+  done
+  # every -H/--header @file is read from scratch/tmp
+  for h in $(printf '%s' "$cmd" | grep -oE '(-H|--header)[[:space:]]+@[^[:space:]]+' | sed -E 's/^(-H|--header)[[:space:]]+@//'); do
+    case "$h" in *scratchpad*|*/tmp/*|*/private/tmp/*) : ;; *) curl_ok=no ;; esac
+  done
+  if [ "$curl_ok" = yes ]; then
+    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"curl read of the local app — localhost/127.0.0.1 only, no -L, no body/upload, output discarded or to scratch, header-file from scratch: a same-machine probe with no exfil path. External host, -L, a request body, or output/header-file outside scratch all fall through to a prompt."}}'
+    exit 0
+  fi
+fi
+
+# Rule 10e — jq reading the ENVIRONMENT. jq ships with Claude Code and runs prompt-free (a
+# built-in default-allow, in no settings file), and it can read env vars via the `env` builtin or
+# `$ENV` — so `jq -n env` / `jq -rn '$ENV.SECRET'` would dump environment variables (possibly
+# secrets) into the transcript with no prompt, a silent bypass of the deliberately-gated `printenv`.
+# Force a prompt. Gate `$ENV` and an `env` token NOT preceded by `.` — so JSON field access like
+# `.env` / `.config.env` is left alone, while the builtin (`env`, `env.KEY`, even quoted at the
+# program start like `'env.PATH'`) is caught. A quoted `"env"` string, a `{env: …}` key, or an
+# `--arg env` may ALSO ask — an acceptable rare false-prompt; the priority is never a silent dump.
+if printf '%s\n' "$leaders" | grep -qx 'jq' \
+   && printf '%s' "$cmd" | grep -Eq '[$]ENV([^a-zA-Z_]|$)|(^|[^.a-zA-Z0-9_])env([^a-zA-Z_]|$)'; then
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"jq is reading the environment (env builtin / $ENV), which would dump environment variables (possibly secrets) into the transcript prompt-free — the hazard printenv is gated for. Confirm it is intended. Reading a JSON field named .env is not this (it is left alone)."}}'
+  exit 0
+fi
+
 # Rule 11 — editing a file THROUGH a shell interpreter instead of the Edit/Write
 # tool: `sed -i` / `perl -i` (in-place), or a `node`/`python`/`perl` fed inline
 # code that writes a file — via `-e`/`-c`, via stdin `-`, or via a heredoc

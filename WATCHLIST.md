@@ -61,7 +61,11 @@ An agent ran `cd <abspath> && npx prettier --version` — described as "confirm 
 
 - **Grindable?** Only a narrow slice: `npx <tool> --version|--help` is ceremony in a lockfile project (a tool's presence/version is in `package-lock.json`), so it *could* be corrected → "run it with `npm run <script>`; check location with `pwd`." But it's **one sample** — watch for recurrence before fitting a rule (a finding is a sample, not a population). The general "agent picked a weird probe" is not detectable.
 
-### Authenticated localhost curl probe (`-H @cookie-file` + quoted URL) prompts · seen 2026-10-15
+### ✅ Resolved — authenticated localhost curl probe (`-H @cookie-file` + quoted URL) · seen 2026-10-15, built 2026-10-19
+
+**Became common** (~12+ in one RTS-1413 session, continued into the next), so the frequency threshold below was met. Built **Rule 10d**: a positive-allow for curl that reads the LOCAL app — every http(s) URL is localhost/127.0.0.1 (host pin = exfil guard, any port), no `-L` (can't follow an open-redirect outward), no body/upload/method override (read-only GET), no `-O`, `-o` only to `/dev/null` or scratch/tmp, `-H @header-file` only from scratch/tmp. Covers the authed status/redirect probes AND the `-o <scratch>.html` fetches; external host / `-L` / POST / output or header-file outside scratch all fall through to a normal prompt. Tested in `tests/run.sh` (12 cases). The original analysis below is kept for context.
+
+
 
 An agent ran an open-redirect probe: `curl -s -o /dev/null -w "%{http_code} %{redirect_url}\n" -H @<scratchpad>/cookie-header.txt "http://localhost:3000/%2Fevil.example/suppliers/xyz"` (sends the session cookie, tests an encoded-slash open redirect). Prompted — the allowlist entry `Bash(curl -s -o /dev/null -w * http://localhost:3000*)` doesn't match: the URL is **quoted** (`"http://…`, so the entry's ` http://localhost:3000` literal, which needs a space directly before `http`, fails) and there's a `-H @file` in between (CC may also gate `-H @file` on its own).
 

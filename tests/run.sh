@@ -196,6 +196,27 @@ expect_allow 'npm run test:coverage -- --findRelatedTests "src/app/[locale]/page
 expect_allow 'npm run test:coverage -- --collectCoverageFrom="src/{x}.ts"'              # single {x}, no comma -> not an expansion
 expect_allow 'mkdir -p "src/foo/{a,b,c}"'                                                # braces outside a coverage/jest context -> not force-rewritten
 
+echo "== Rule 10d — curl read of the local app auto-approved (localhost, no exfil/mutate) =="
+expect_allow_json 'curl -s -o /dev/null -w "%{http_code} %{redirect_url}\n" -H @/private/tmp/x/scratchpad/cookie-header.txt http://localhost:3000/foo/accounts'  # authed probe
+expect_allow_json 'curl -s -o /dev/null -w "%{http_code}\n" "http://localhost:3000/%2Fevil.example/suppliers/xyz"'  # open-redirect probe: evil.example in PATH, host is localhost
+expect_allow_json 'curl -s -o /tmp/x.html -w "%{http_code}\n" -H @/tmp/c http://127.0.0.1:3001/bar'  # 127.0.0.1, port 3001, html to /tmp
+expect_allow_json "curl -s -o /dev/null -w '%{http_code}\n' http://localhost:3000/login"  # plain liveness
+expect_allow 'curl -s https://evil.example/x'                                           # external host -> falls through to prompt
+expect_allow 'curl -s -o /dev/null http://localhost:3000/a https://evil.example/b'      # mixed localhost + external -> prompt
+expect_allow 'curl -s -L -o /dev/null http://localhost:3000/x'                          # -L could follow a redirect outward -> prompt
+expect_allow 'curl -s -X POST -o /dev/null http://localhost:3000/x'                     # method override (mutation) -> prompt
+expect_allow "curl -s -d 'a=b' http://localhost:3000/x"                                 # request body -> prompt
+expect_allow 'curl -s -o /Users/me/x.html http://localhost:3000/x'                      # output outside scratch -> prompt
+expect_allow 'curl -s -H @/Users/me/.ssh/id_rsa http://localhost:3000/x'                # header-file outside scratch -> prompt
+expect_allow 'curl -s -O http://localhost:3000/x'                                       # remote-name write -> prompt
+
+echo "== Rule 10e — jq reading the environment is gated (printenv-bypass closure) =="
+expect_gate 'jq -n env'                                                                 # env builtin
+expect_gate "jq -rn '\$ENV.HOME'"                                                       # \$ENV
+expect_gate "jq -rn 'env.PATH'"                                                         # builtin quoted at program start
+expect_allow "jq -r '.env' package.json"                                                # .env field access -> not gated (prompt-free jq)
+expect_allow "jq -r '.scripts | keys[]' package.json"                                   # ordinary piped filter -> not gated
+
 echo "== Rule 9b — cosmetic git flag (pager/color) that no-ops under capture, breaks the allowlist =="
 expect_block 'git -c core.pager=cat show f491d6c --stat' 'no-ops under capture'
 expect_block 'git --no-pager log --oneline -20'          'no-ops under capture'
