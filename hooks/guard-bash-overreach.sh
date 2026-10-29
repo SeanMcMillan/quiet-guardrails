@@ -105,7 +105,10 @@ if printf '%s' "$dequoted" | grep -Eq '(^|[^[:alnum:]_])git([[:space:]]+[^;|&[:s
   # 'git -C <path>' / 'git -c k=v' BEFORE the subcommand is not misread as a
   # 'branch -C/-c' copy. That false match would send 'git -C … branch --list'
   # (read-only) into this ASK gate instead of on to the git -C corrector (Rule 9).
-  branchargs="$(printf '%s' "$dequoted" | sed 's/^.*[[:space:]]branch//')"
+  # Also cut at the next segment separator (;/&/|) so a FOLLOWING command's flag is
+  # not scanned as a branch flag — e.g. 'git branch --show-current && git diff -M …'
+  # must not read git diff's -M as 'git branch -M' (rename).
+  branchargs="$(printf '%s' "$dequoted" | sed 's/^.*[[:space:]]branch//; s/[;&|].*//')"
   if printf '%s' "$branchargs" | grep -Eq '(^|[[:space:]])(-[a-zA-Z]*[dDfmMcC][a-zA-Z]*|--force|--delete|--move|--copy|--force-with-lease)([[:space:]]|=|$)'; then
     printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"git branch with a mutating flag (-f/-d/-D/-m/-M/-c/-C or --force/--delete/--move) force-moves, deletes, renames, or copies a branch. Claude Code auto-approves it because git branch is read-only-classified, so this hook forces a confirmation."}}'
     exit 0
@@ -295,6 +298,23 @@ fi
 # rules' business, handled above.)
 if printf '%s' "$cmd" | grep -Eq '2>&1' && ! printf '%s' "$scan" | grep -Eq '[|]'; then
   echo "Overreach: a bare '2>&1' stream-merge. The harness already returns both stdout and stderr (and exit status) — drop the '2>&1' and run the command bare." >&2
+  exit 2
+fi
+
+# Rule 6b — a `cd <X>` where X is the directory the command is ALREADY in (the payload cwd),
+# chained with another command (e.g. `cd /abs/project && git status; …`). The cd is a no-op, but
+# `cd && git` is a Claude Code force-prompt special case (a cd into a repo can run that repo's
+# hooks), so the redundant self-cd buys a prompt for nothing. Drop it and run the commands
+# directly — git uses the current directory. Runs even in a SUBAGENT (unlike Rule 6): a redundant
+# self-cd is never the cwd-independence workaround — the subagent's first Bash call already starts
+# in the project dir, so plain git there is correct. Only fires with a chain AND a git leader
+# (the cases that actually prompt); a lone `cd <cwd>` or a non-vcs chain is left alone.
+cwd6b="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)"
+cdtgt6b="$(printf '%s' "$cmd" | sed -nE 's/^[[:space:]]*cd[[:space:]]+([^[:space:];&|]+).*/\1/p')"
+if [ -n "$cwd6b" ] && [ -n "$cdtgt6b" ] && [ "${cdtgt6b%/}" = "${cwd6b%/}" ] \
+   && printf '%s\n' "$leaders" | grep -qx 'git' \
+   && printf '%s' "$cmd" | grep -Eq '(&&|;|\|)'; then
+  echo "Overreach: 'cd $cdtgt6b' targets the directory you are already in, then chains a git command — and 'cd && git' is a Claude Code force-prompt special case (a cd into a repo can run its hooks), so this redundant self-cd prompts for nothing. Drop the 'cd $cdtgt6b &&' and run the commands directly; git uses the current directory. (A subagent's first Bash call already starts in the project dir — no cd needed.)" >&2
   exit 2
 fi
 
@@ -576,6 +596,20 @@ if printf '%s' "$cmd" | grep -Eq '"[^"]*\$[0-9]'; then
   exit 2
 fi
 
+# Rule 11e — an UNQUOTED Next.js route-group path segment: `(group)` or `[dynamic]` glued to a
+# path (e.g. `ls src/app/[locale]/(shell)/_components`). Those dirs have literal parens/brackets;
+# unquoted, bash rejects the `(` (syntax error) and Claude Code's subshell/glob gate prompts.
+# Double-quoting the path makes it literal and prompt-free (verified: quoted `[locale]` and
+# `(shell)` both list fine). Detection strips quoted spans FIRST, so an already-quoted path does
+# NOT match — only a route-group paren/bracket that survives stripping (i.e. was unquoted) fires.
+# `/(` targets a paren glued after a path separator (a real subshell `(cd …)` / `$(…)` has a
+# space or `$` before `(`, not `/`, so neither matches).
+rgstripped="$(printf '%s' "$cmd" | sed -E 's/"[^"]*"//g; s/'\''[^'\'']*'\''//g')"
+if printf '%s' "$rgstripped" | grep -Eq '/\([a-zA-Z0-9_.-]+\)|/\[[a-zA-Z0-9_.]+\]'; then
+  echo "Overreach: an unquoted route-group path segment — a Next.js (group) or [dynamic] dir glued into a path, e.g. src/app/[locale]/(shell)/_components. The parens/brackets are literal, but unquoted, bash rejects the '(' and Claude Code's subshell/glob gate prompts. Double-quote the whole path and it is literal and prompt-free: ls \"src/app/[locale]/(shell)/_components\" (quote each such path arg)." >&2
+  exit 2
+fi
+
 # Rule 12 — reading repo content through `gh api` (or `gh pr diff`) instead of the
 # local checkout. `gh pr diff`, `gh api …/commits/<sha>`, `…/compare/a...b`, and
 # `…/contents/<path>` all fetch over the API and prompt (gh api can't be safely
@@ -616,6 +650,17 @@ fi
 # prefix — it prompts. gh accepts the flag AFTER the subcommand too, so move it there.
 if printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+(-R|--repo)([[:space:]=]|$)'; then
   echo "Overreach: gh's '--repo'/'-R' flag placed before the subcommand ('gh --repo <owner/repo> pr view …') no longer starts with 'gh pr view', so it misses the 'gh pr view *' allowlist and prompts. gh takes the flag after the subcommand — write 'gh pr view <n> --repo <owner/repo> …' and it auto-approves." >&2
+  exit 2
+fi
+
+# Rule 14b — gh's `--repo`/`-R` value computed by a command SUBSTITUTION
+# (`gh pr view <n> --repo $(cd <dir> && gh repo view --json nameWithOwner -q .nameWithOwner)`).
+# Resolving the repo slug dynamically is needless: CC can't check $(...) output before it runs,
+# so the whole command prompts (the same fail-safe as $(git merge-base …), Rule 12b). A gh repo
+# slug is always known literally. Redirect to the literal form, which matches the `gh pr view *`
+# allowlist and runs prompt-free. Uses $cmd so the raw `$(` is seen.
+if printf '%s' "$cmd" | grep -Eq '(-R|--repo)([[:space:]]+|=)\$\('; then
+  echo "Overreach: gh's '--repo'/'-R' value is a command substitution (\$(…)) — CC can't check \$(...) output before it runs, so it prompts (same fail-safe as \$(git merge-base …)). You already know the repo: pass it literally, 'gh pr view <n> --repo <owner>/<name> …' (the name is the target dir's basename; the owner is your org / the package scope). That matches the 'gh pr view *' allowlist and auto-approves. (Main agent only: alternatively run gh from inside that repo after a standalone 'cd <dir>', with no --repo.)" >&2
   exit 2
 fi
 

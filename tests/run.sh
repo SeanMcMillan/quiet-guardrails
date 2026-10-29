@@ -145,6 +145,8 @@ expect_gate 'git commit -m "wip"'
 expect_gate 'git push origin main'
 expect_gate 'git reset --hard HEAD'
 expect_gate 'git branch -D old'
+expect_gate 'git branch -M old new'            # rename still gates
+expect_gate 'git branch -D old && git diff -M x'  # mutating branch in the FIRST segment still gates after the cut
 expect_gate 'git "push" --force'               # quoted-subcommand fix (#1)
 expect_gate 'git p"u"sh'                        # split-quote fix (#1)
 
@@ -157,6 +159,7 @@ echo "== passes (allow, silent) =="
 expect_allow 'git status'
 expect_allow 'git log --oneline -20'
 expect_allow 'git branch --list'
+expect_allow 'git branch --show-current && git diff -M --name-status --diff-filter=AMD origin/develop...HEAD'  # read branch + diff -M: the -M is git diff's, NOT a branch rename (Rule 8 segment-cut)
 expect_allow 'grep -rn foo src'
 expect_allow 'grep -c foo src | wc -l'         # grep|wc count exemption
 expect_allow 'rg foo src | sort | uniq -c | sort -rn'        # rg aggregation tally (Rule 2 reducers)
@@ -217,6 +220,22 @@ expect_gate "jq -rn 'env.PATH'"                                                 
 expect_allow "jq -r '.env' package.json"                                                # .env field access -> not gated (prompt-free jq)
 expect_allow "jq -r '.scripts | keys[]' package.json"                                   # ordinary piped filter -> not gated
 
+echo "== Rule 6b — redundant 'cd <cwd> && git' dropped =="
+expect_block 'cd /x/proj && git status --short; git log --oneline -8; ls docs; ls' 'already in' '/x/proj'  # the incident: cd to the dir you're in
+expect_block 'cd /x/proj && git status' 'already in' '/x/proj'                            # minimal redundant form
+expect_block 'cd /x/proj/ && git status' 'already in' '/x/proj'                           # trailing slash normalized
+expect_block 'cd /other/dir && git status' 'bundled in one command' '/x/proj'             # DIFFERENT dir -> not redundant, Rule 6 handles it
+expect_allow 'cd /x/proj && npm run build' '/x/proj'                                      # redundant cd but no git -> not the prompting case, left alone
+expect_allow 'git status --short' '/x/proj'                                               # control: no cd -> guard silent (CC read-classifies it)
+
+echo "== Rule 11e — unquoted route-group path corrected to quote it =="
+expect_block 'ls src/app/[locale]/(shell)/_components' 'route-group'                       # the incident: unquoted (shell)
+expect_block 'ls /Users/me/app/[locale]/dashboard' 'route-group'                          # unquoted [locale] alone
+expect_block 'git log --oneline -- src/app/(marketing)/page.tsx' 'route-group'            # general (any command)
+expect_allow 'ls "src/app/[locale]/(shell)/_components"'                                   # QUOTED -> correct form, passes
+expect_allow "ls 'src/app/[locale]/(shell)'"                                               # single-quoted -> passes
+expect_allow 'ls src/app/dashboard/_components'                                            # no route-group segment -> passes
+
 echo "== Rule 9b — cosmetic git flag (pager/color) that no-ops under capture, breaks the allowlist =="
 expect_block 'git -c core.pager=cat show f491d6c --stat' 'no-ops under capture'
 expect_block 'git --no-pager log --oneline -20'          'no-ops under capture'
@@ -245,6 +264,9 @@ expect_allow 'git diff origin/develop...HEAD --stat -- src'   # the ... form pas
 expect_allow 'gh pr view 42 --comments'                 # correct form: read-only, whitelistable
 expect_allow 'gh pr view 42 --json state,mergedAt'      # PR metadata via gh pr view is fine
 expect_allow 'gh pr view 196 --repo o/r --json title'  # Rule 14's target: --repo after the subcommand
+expect_block 'gh pr view 215 --repo $(cd /x/obm-rts-api-docs && gh repo view --json nameWithOwner -q .nameWithOwner) --json title,body'  'command substitution'  # Rule 14b: --repo $(...) -> literal
+expect_block 'gh pr view 215 --repo=$(gh repo view --json nameWithOwner)'  'command substitution'  # Rule 14b: --repo=$(...) form too
+expect_allow 'gh pr view 215 --repo foremanmining/obm-rts-api-docs --json title,body'  # the literal form Rule 14b steers toward
 expect_allow 'git show abc123 --stat'                   # the git form Rule 12 steers toward
 
 echo "== heredoc bodies are data, not shell (no false overreach) =="
