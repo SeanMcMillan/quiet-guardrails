@@ -105,6 +105,11 @@ expect_allow_json 'git -C /x branch -r'
 expect_gate 'git -C /x branch -D oldfeature'                 # mutating branch gated by Rule 8 ask BEFORE 8g, even via -C
 expect_block 'git -C /x branch newfeature'     'git pointed at another repo'   # bare-name CREATE is not a read flag -> still redirects
 expect_block 'git -C /x branch --set-upstream-to=origin/x' 'git pointed at another repo'  # upstream edit not a read flag -> still redirects
+expect_allow_json "git -C /Users/me/example-project tag --sort=-creatordate --format='%(refname:short) %(creatordate:short)'"  # the incident: read-only tag listing via git -C (Rule 8h)
+expect_allow_json 'git -C /x tag -l "v2.*"'                  # tag --list with pattern
+expect_allow_json 'git -C /x tag'                            # bare tag (lists) too
+expect_block 'git -C /x tag v2.11.0'           'git pointed at another repo'   # bare-name CREATE is not a read flag -> still redirects
+expect_gate  'git -C /x tag -d oldtag'                        # delete gated by Rule 8i ask (fires before 8h/Rule 9), even via -C
 expect_block 'git --git-dir=/x/.git --work-tree=/x status --short --branch' 'git pointed at another repo'
 expect_block 'git --work-tree=/x status'       'git pointed at another repo'
 expect_block 'GIT_DIR=/x/.git GIT_WORK_TREE=/x git status --short --branch' 'git pointed at another repo'
@@ -113,6 +118,7 @@ expect_allow_json 'git -C /x log --oneline -6' # read git -C auto-approved (Rule
 expect_allow_json 'git -C /x show 9764edc'
 expect_allow_json 'git -C /x status --short'
 expect_allow_json 'git -C /x diff HEAD~1'
+expect_allow_json 'git -C /x rev-list --left-right --count HEAD...origin/develop'  # rev-list (read-only commit listing) auto-approved
 expect_allow_json 'git -C /x fetch origin pull/486/head'  # fetch (non-destructive) auto-approved
 expect_allow_json 'git -C /x fetch'            # bare fetch too
 expect_block 'git -C /x difftool HEAD'         'git pointed at another repo'   # difftool (exec) NOT matched by 8f -> redirects
@@ -131,9 +137,9 @@ expect_block "ls | sed 's|.*/||'"              'gates sed'           # read-only
 expect_block $'python3 - <<PY\np.write_text("x")\nPY'   'shell interpreter'  # heredoc python that writes (Rule 11 stdin/heredoc)
 expect_block $'node - <<JS\nfs.writeFileSync("f","x")\nJS' 'shell interpreter'  # stdin-dash node write
 expect_allow $'python3 - <<PY\nprint(1+1)\nPY'                              # read-only heredoc python still passes
-expect_block 'grep -n meter /Users/sean/projects/obm-rts-frontend/../../../private/tmp/x/Main.html' 'traversal'  # Rule 11c
+expect_block 'grep -n meter /Users/me/projects/example-frontend/../../../private/tmp/x/Main.html' 'traversal'  # Rule 11c
 expect_allow 'grep -n meter /private/tmp/claude-501/x/scratchpad/Main.html'  # clean absolute, no ..
-expect_allow 'grep -n meter ../obm-rts-api/foo.ts'                           # relative ../sibling not caught
+expect_allow 'grep -n meter ../example-api/foo.ts'                           # relative ../sibling not caught
 expect_block 'agent-browser wait --text "$62.12/MWh"'  'inside double quotes'  # Rule 11d: $digit expands + mangles
 expect_allow "agent-browser wait --text '\$62.12/MWh'"                         # single-quoted literal is fine
 expect_allow 'echo "$HOME"'                                                    # letter var, not $<digit>
@@ -146,6 +152,11 @@ expect_gate 'git push origin main'
 expect_gate 'git reset --hard HEAD'
 expect_gate 'git branch -D old'
 expect_gate 'git branch -M old new'            # rename still gates
+expect_gate 'git tag -d oldtag'                # Rule 8i: tag delete
+expect_gate 'git tag -f v1.0 HEAD'             # Rule 8i: tag force-overwrite
+expect_gate 'git tag --delete v1.0'            # long form
+expect_allow 'git tag --sort=-creatordate --format="%(refname:short)"'  # read-only tag listing (no -C) stays silent, not gated by 8i
+expect_allow 'git tag --sort -creatordate'     # space-separated sort value: creatordate's d/f not misread as a flag
 expect_gate 'git branch -D old && git diff -M x'  # mutating branch in the FIRST segment still gates after the cut
 expect_gate 'git "push" --force'               # quoted-subcommand fix (#1)
 expect_gate 'git p"u"sh'                        # split-quote fix (#1)
@@ -175,6 +186,12 @@ expect_gate  'git grep --open-files-in-pager foo'            # long form
 expect_allow 'git grep -n foo origin/develop -- rts/invoice/models.py'  # read-mode git grep stays silent
 expect_block 'git diff --name-only -z | xargs -0 npx prettier --log-level warn --write src/x.ts' 'directly'  # Rule 2c
 expect_allow 'npx prettier --log-level warn --write src/x.ts'  # direct form passes
+expect_block 'grep -nE "^#{1,3} " docs/notes/CLEANUP-NOTES.md' 'numeric brace interval'  # Rule 2d: the incident, {1,3} in ERE
+expect_block 'rg "a{2,4}" src' 'numeric brace interval'                                   # rg interval
+expect_block 'sed -nE "/x{1,}/p" file' 'numeric brace interval'                          # sed interval {1,}
+expect_allow 'grep -nE "^#+ " docs/notes/CLEANUP-NOTES.md'                                # brace-free form passes
+expect_allow 'grep -E "x{3}" file'                                                        # exact count, no comma -> not an expansion, not caught
+expect_allow 'grep foo {a,b}.txt'                                                         # non-numeric filename brace -> not this rule (CC's own gate handles it)
 expect_allow 'ls -la'
 
 echo "== Rule 10 — raw/npx tool with a wrapping package.json (cwd-aware) =="
@@ -264,9 +281,9 @@ expect_allow 'git diff origin/develop...HEAD --stat -- src'   # the ... form pas
 expect_allow 'gh pr view 42 --comments'                 # correct form: read-only, whitelistable
 expect_allow 'gh pr view 42 --json state,mergedAt'      # PR metadata via gh pr view is fine
 expect_allow 'gh pr view 196 --repo o/r --json title'  # Rule 14's target: --repo after the subcommand
-expect_block 'gh pr view 215 --repo $(cd /x/obm-rts-api-docs && gh repo view --json nameWithOwner -q .nameWithOwner) --json title,body'  'command substitution'  # Rule 14b: --repo $(...) -> literal
+expect_block 'gh pr view 215 --repo $(cd /x/example-api-docs && gh repo view --json nameWithOwner -q .nameWithOwner) --json title,body'  'command substitution'  # Rule 14b: --repo $(...) -> literal
 expect_block 'gh pr view 215 --repo=$(gh repo view --json nameWithOwner)'  'command substitution'  # Rule 14b: --repo=$(...) form too
-expect_allow 'gh pr view 215 --repo foremanmining/obm-rts-api-docs --json title,body'  # the literal form Rule 14b steers toward
+expect_allow 'gh pr view 215 --repo foremanmining/example-api-docs --json title,body'  # the literal form Rule 14b steers toward
 expect_allow 'git show abc123 --stat'                   # the git form Rule 12 steers toward
 
 echo "== heredoc bodies are data, not shell (no false overreach) =="

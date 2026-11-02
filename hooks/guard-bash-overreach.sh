@@ -115,6 +115,22 @@ if printf '%s' "$dequoted" | grep -Eq '(^|[^[:alnum:]_])git([[:space:]]+[^;|&[:s
   fi
 fi
 
+# Rule 8i — mutating `git tag` (delete / force-overwrite). Like branch (Rule 8), Claude Code
+# read-only-classifies all of `git tag …`, so `git tag -d <name>` (delete) and `git tag -f <name>`
+# (force-overwrite an existing tag) auto-approve with NO prompt. Force a confirmation. Mirrors
+# Rule 8: scan the mutating flag only in the args AFTER 'tag', cut at the next segment separator so
+# a following command's flag isn't misread. Gates delete/force only (like branch gates
+# delete/move/copy, not plain create); bare `git tag <name>` create is the same ungated gap branch
+# has. EXPLICIT flag tokens (not a char class) so a sort value like `--sort -creatordate` — whose
+# 'creatordate' contains d/f — is not misread as a flag.
+if printf '%s' "$dequoted" | grep -Eq '(^|[^[:alnum:]_])git([[:space:]]+[^;|&[:space:]]+)*[[:space:]]+tag([[:space:]]|$)'; then
+  tagargs="$(printf '%s' "$dequoted" | sed 's/^.*[[:space:]]tag//; s/[;&|].*//')"
+  if printf '%s' "$tagargs" | grep -Eq '(^|[[:space:]])(-d|-D|-f|--delete|--force)([[:space:]]|=|$)'; then
+    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"git tag with a mutating flag (-d/--delete deletes a tag; -f/--force overwrites an existing one). Claude Code auto-approves it because git tag is read-only-classified, so this hook forces a confirmation."}}'
+    exit 0
+  fi
+fi
+
 # Rule 8b — WORKFLOW gate (before the escape, so it can't be #override'd past): git
 # subcommands that mutate the index, working tree, or history — which you manage
 # yourself (the index and any uncommitted work are yours to stage/commit). Claude
@@ -249,6 +265,18 @@ if printf '%s' "$dequoted" | grep -Eq 'xargs[^|;&]*prettier'; then
   exit 2
 fi
 
+# Rule 2d — a NUMERIC brace interval ({n,m} / {n,}) in a grep/rg/sed/find regex (e.g.
+# `grep -nE "^#{1,3} " file`). It is a regex quantifier, but Claude Code's brace-expansion gate is
+# QUOTE-BLIND (see Rule 10c) and fires on {n,m} even inside the quoted pattern, so a normal search
+# prompts. Rewrite the quantifier brace-free. Scoped to search leaders AND a numeric interval, so
+# filename brace expansion ({a,b}.txt — non-numeric) and coverage globs (Rule 10c) are not caught
+# here; `{3}` (no comma) is not an expansion and does not trip the gate, so it is left alone.
+if printf '%s\n' "$leaders" | grep -qxE 'grep|egrep|fgrep|rg|sed|find' \
+   && printf '%s' "$cmd" | grep -Eq '\{[0-9]+,[0-9]*\}'; then
+  echo "Overreach: a numeric brace interval {n,m} in a search regex (e.g. \"^#{1,3} \"). It is a regex quantifier, but Claude Code's brace gate is quote-blind and prompts on {n,m} even inside the quoted pattern. Rewrite it brace-free: + (one or more), * (zero or more), ? (optional), or repeat the atom for an exact bound (1-3 of # -> '##?#?', or just '^#+ ' to list all heading levels)." >&2
+  exit 2
+fi
+
 # Rule 3 — reading a file: cat (anywhere), or a leading head/tail. Use the Read tool.
 if printf '%s\n' "$leaders" | grep -qx 'cat'; then
   echo "Overreach: 'cat' in a Bash call. Read files with the Read tool (or feed the file straight to jq)." >&2
@@ -349,8 +377,8 @@ fi
 # can run on a read) — fine for local checkouts you control, and git's default
 # safe.directory refuses repos owned by another user. `fetch` is the one non-read
 # (updates remote-tracking refs, non-destructive), included for the cross-repo PR-diff flow.
-if printf '%s' "$dequoted" | grep -Eq '(^|[^[:alnum:]_])git[[:space:]]+-C[[:space:]]+[^[:space:]]+[[:space:]]+(show|log|diff|status|for-each-ref|ls-tree|fetch)([[:space:]]|$)'; then
-  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"read-only git -C <path> <show/log/diff/status/for-each-ref/ls-tree/fetch> — the sanctioned cross-repo read, auto-approved. An injected global -c/--exec-path between path and subcommand would not match this and still prompts."}}'
+if printf '%s' "$dequoted" | grep -Eq '(^|[^[:alnum:]_])git[[:space:]]+-C[[:space:]]+[^[:space:]]+[[:space:]]+(show|log|diff|status|for-each-ref|ls-tree|rev-list|fetch)([[:space:]]|$)'; then
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"read-only git -C <path> <show/log/diff/status/for-each-ref/ls-tree/rev-list/fetch> — the sanctioned cross-repo read, auto-approved. An injected global -c/--exec-path between path and subcommand would not match this and still prompts."}}'
   exit 0
 fi
 
@@ -366,6 +394,19 @@ fi
 # as 8f: subcommand immediately after the single path token, so an injected -c won't match.
 if printf '%s' "$dequoted" | grep -Eq '(^|[^[:alnum:]_])git[[:space:]]+-C[[:space:]]+[^[:space:]]+[[:space:]]+branch([[:space:]]+(-a|-r|-l|-v|-vv|--all|--remotes|--list|--verbose|--show-current|--contains|--no-contains|--merged|--no-merged|--points-at|--format|--sort|--color|--no-color)([[:space:]=]|$)|[[:space:]]*$)'; then
   printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"read-only git -C <path> branch listing (-a/-r/-l/--list/--show-current/etc.) — a cross-repo read. Mutating branch forms are gated by the ask above and never reach here; bare-name create and upstream edits are not read-only flags, so they still prompt."}}'
+  exit 0
+fi
+
+# Rule 8h — read-only `git -C <path> tag <listing>` auto-approve. Like branch (Rule 8g), `tag` is
+# dual-use (also creates/deletes/force-moves), so it is not in Rule 8f's always-read set and a
+# blanket allow would admit the destructive forms. The regex is the gate: the first token after
+# `tag` must be a read-only listing flag (or nothing — bare `tag` lists), so `git tag <name>`
+# (create), `git tag -d/-D` (delete), `-f` (force), `-a/-s/-m` (annotated create) do NOT match and
+# keep prompting. Same path/injection safety as 8f/8g: subcommand right after the single path
+# token. (The destructive `git tag -d/-f` UNDER-prompt — CC read-classifies it like branch once it
+# is NOT behind -C — is a separate pre-existing gap, not closed here.)
+if printf '%s' "$dequoted" | grep -Eq '(^|[^[:alnum:]_])git[[:space:]]+-C[[:space:]]+[^[:space:]]+[[:space:]]+tag([[:space:]]+(-l|--list|-n|--sort|--format|--contains|--no-contains|--merged|--no-merged|--points-at|--column|--omit-empty|-i|--ignore-case|--color|--no-color)([[:space:]=]|$)|[[:space:]]*$)'; then
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"read-only git -C <path> tag listing (-l/--list/--sort/--format/--contains/etc.) — a cross-repo read. Create/delete/force (git tag <name>, -d/-D, -f, -a/-s/-m) are not read-only flags, so they still prompt."}}'
   exit 0
 fi
 
@@ -570,7 +611,7 @@ if printf '%s\n' "$leaders" | grep -qxE 'sed'; then
 fi
 
 # Rule 11c — an ABSOLUTE path with embedded `../` traversal (e.g.
-# `/Users/…/obm-rts-frontend/../../../../private/tmp/…`). Starting from an absolute
+# `/Users/…/example-frontend/../../../../private/tmp/…`). Starting from an absolute
 # root and then climbing out with `..` is always reducible to a plain canonical
 # path; Claude Code's own traversal gate prompts on it ("may follow a symlink
 # outside the working directory"), teaching nothing. Redirect to the canonical
@@ -581,7 +622,7 @@ fi
 # Leading `../` is thus correctly left alone; interior relative `dir/..` also prompts but
 # agents rarely emit it, so the rule is deliberately not widened for it.)
 if printf '%s' "$cmd" | grep -Eq '(^|[[:space:]])/[^[:space:]]*/\.\.(/|$|[[:space:]])'; then
-  echo "Overreach: an absolute path with embedded ../ traversal (…/obm-rts-frontend/../../../private/tmp/…). It climbs out of the project and trips Claude Code's traversal gate. Write the canonical absolute path directly — the scratchpad is already absolute (/private/tmp/claude-…/…/scratchpad/…), no ../ needed — or use the Read tool with that path." >&2
+  echo "Overreach: an absolute path with embedded ../ traversal (…/example-frontend/../../../private/tmp/…). It climbs out of the project and trips Claude Code's traversal gate. Write the canonical absolute path directly — the scratchpad is already absolute (/private/tmp/claude-…/…/scratchpad/…), no ../ needed — or use the Read tool with that path." >&2
   exit 2
 fi
 
