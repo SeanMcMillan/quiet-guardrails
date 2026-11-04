@@ -79,6 +79,9 @@ expect_allow_sub() { runsub "$1"
 expect_gate_sub()  { runsub "$1"
   if [ "$code" -eq 0 ] && printf '%s' "$out" | grep -q '"permissionDecision":"ask"'; then ok
   else bad "gate(subagent): $1" "want ask JSON; got code=$code out=[$out]"; fi; }
+expect_block_sub() { runsub "$1"
+  if [ "$code" -eq 2 ] && printf '%s' "$err" | grep -qF "$2"; then ok
+  else bad "block(subagent): $1" "want exit 2 + [$2]; got code=$code err=[$err]"; fi; }
 expect_allow_json()     { run "$1"
   if [ "$code" -eq 0 ] && printf '%s' "$out" | grep -q '"permissionDecision":"allow"'; then ok
   else bad "allow-json: $1" "want allow JSON; got code=$code out=[$out]"; fi; }
@@ -132,6 +135,10 @@ expect_allow "node -e \"console.log(1 + 1)\""                                   
 expect_block 'sed -i "s/a/b/" f'               'shell interpreter'
 expect_block 'sed -Ei "s/a/b/" f'              'shell interpreter'   # combined-flag fix (#6)
 expect_block 'perl -pi -e "s/a/b/" f'          'shell interpreter'   # perl -pi fix (#6)
+expect_block 'perl -0pi -e "s/a/b/g" f.test.tsx g.test.tsx'  'shell interpreter'  # -0pi: DIGIT in the flag bundle still means in-place
+expect_block 'cd "/x/(shell)/__tests__" && perl -0pi -e "s/a/b/" *.test.tsx'  'shell interpreter'  # cd into a route-group dir + in-place perl still caught
+expect_block_sub 'cd "/x/(shell)/__tests__" && perl -0pi -e "s/a/b/" *.test.tsx && git diff --stat'  'shell interpreter'  # subagent (Rule 6 carved out): perl still caught before the chained git
+expect_block 'perl -0ni -e "..." f'            'shell interpreter'   # -0ni too
 expect_block "sed 's/a/b/' f"                  'gates sed'           # read-only sed steered off (Rule 11b)
 expect_block "ls | sed 's|.*/||'"              'gates sed'           # read-only sed in a pipe
 expect_block $'python3 - <<PY\np.write_text("x")\nPY'   'shell interpreter'  # heredoc python that writes (Rule 11 stdin/heredoc)
@@ -215,6 +222,12 @@ expect_block 'npx jest --collectCoverageFrom="src/**/*.{ts,tsx}" --findRelatedTe
 expect_allow 'npm run test:coverage -- --findRelatedTests "src/app/[locale]/page.tsx"'  # no braces, quoted bracket path is fine
 expect_allow 'npm run test:coverage -- --collectCoverageFrom="src/{x}.ts"'              # single {x}, no comma -> not an expansion
 expect_allow 'mkdir -p "src/foo/{a,b,c}"'                                                # braces outside a coverage/jest context -> not force-rewritten
+
+echo "== Rule 10f — brace expansion in a prettier file list -> directory glob =="
+expect_block 'npx prettier --log-level warn --write dashboard/_components/__tests__/{PanelA,PanelB,PanelC}.test.tsx transactions/_components/__tests__/{X,Y}.test.tsx' 'by DIRECTORY'  # the incident
+expect_block 'prettier --write "src/foo/{A,B}.tsx"' 'by DIRECTORY'                # bare prettier too
+expect_allow 'npx prettier --log-level warn --write "real-time-data/_components/__tests__/" "consumption/__tests__/"'  # directory args, no braces -> the correct form passes
+expect_allow 'npx prettier --log-level warn --write "src/foo/__tests__/*.test.tsx"'      # glob, no braces -> passes
 
 echo "== Rule 10d — curl read of the local app auto-approved (localhost, no exfil/mutate) =="
 expect_allow_json 'curl -s -o /dev/null -w "%{http_code} %{redirect_url}\n" -H @/private/tmp/x/scratchpad/cookie-header.txt http://localhost:3000/foo/accounts'  # authed probe

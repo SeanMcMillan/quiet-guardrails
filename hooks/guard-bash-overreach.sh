@@ -537,6 +537,19 @@ if printf '%s' "$scan" | grep -Eq 'collectCoverageFrom|test:coverage|(^|[^[:alnu
   exit 2
 fi
 
+# Rule 10f — brace expansion in a PRETTIER file list (e.g. `prettier --write
+# dir/__tests__/{A,B,C}.test.tsx`). Naming many files with `{a,b,c}` is the natural shell idiom, but
+# Claude Code's brace gate is quote-blind (see Rule 10c) and prompts on it. Prettier is idempotent
+# and deterministic, so the prompt-free fix is to format by DIRECTORY glob instead — the few
+# already-clean siblings that sweeps in are a no-op. (`--check` with braces is handled by Rule 10b,
+# which runs first and redirects to the npm check script.) Runs after 10b so only `--write`-style
+# brace lists reach here.
+if printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])prettier([[:space:]]|$)' \
+   && printf '%s' "$cmd" | grep -Eq '\{[^{}]*,[^{}]*\}'; then
+  echo "Overreach: brace expansion ({a,b,c}) in a prettier file list. Claude Code's brace gate is quote-blind and prompts on it. Format by DIRECTORY instead — npx prettier --log-level warn --write \"<dir>/*.test.tsx\" (or just the dir path) per directory you touched; prettier is idempotent so formatting already-clean siblings is a harmless no-op. For edits scattered across many directories, 'npm run format' formats the whole repo (only safe when the working tree is otherwise clean — it rewrites every unformatted file)." >&2
+  exit 2
+fi
+
 # Rule 10d — curl READ of the LOCAL app (positive allow). Checking status/redirects of local
 # routes and fetching server-rendered HTML with the browser's saved cookies is a sanctioned
 # same-machine probe. Allow it outright when it can neither exfil nor mutate: every http(s) URL
@@ -591,7 +604,7 @@ fi
 # (arbitrary code / file write). Read-only inline forms — `node -e` that only
 # computes/prints, a heredoc that only reads — have no write call and pass, as
 # does running a committed script (`python3 script.py`: no -e/-/heredoc).
-if { printf '%s\n' "$leaders" | grep -qxE 'sed|perl' && printf '%s' "$cmd" | grep -Eq '(^|[[:space:]])(-[a-zA-Z]*i|--in-place)([[:space:]=.'\'']|$)'; } \
+if { printf '%s\n' "$leaders" | grep -qxE 'sed|perl' && printf '%s' "$cmd" | grep -Eq '(^|[[:space:]])(-[a-zA-Z0-9]*i|--in-place)([[:space:]=.'\'']|$)'; } \
    || { printf '%s\n' "$leaders" | grep -qxE 'node|python|python3|perl|ruby' \
         && printf '%s' "$rawcmd" | grep -Eq '(-e|-c|--eval|--exec)([[:space:]]|$)|(^|[[:space:]])-([[:space:]]|$)|<<' \
         && printf '%s' "$rawcmd" | grep -Eq 'writeFileSync|writeFile|appendFileSync|appendFile|fs\.write|\.write\(|writelines|write_text'; }; then
