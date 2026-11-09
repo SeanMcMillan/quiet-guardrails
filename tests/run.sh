@@ -122,7 +122,7 @@ expect_allow_json 'git -C /x show 9764edc'
 expect_allow_json 'git -C /x status --short'
 expect_allow_json 'git -C /x diff HEAD~1'
 expect_allow_json 'git -C /x rev-list --left-right --count HEAD...origin/develop'  # rev-list (read-only commit listing) auto-approved
-expect_allow_json 'git -C /x ls-remote --heads origin rts-1437/nav-cutover'  # ls-remote (read-only remote ref query) auto-approved
+expect_allow_json 'git -C /x ls-remote --heads origin feature/x'  # ls-remote (read-only remote ref query) auto-approved
 expect_allow_json 'git -C /x fetch origin pull/486/head'  # fetch (non-destructive) auto-approved
 expect_allow_json 'git -C /x fetch'            # bare fetch too
 expect_block 'git -C /x difftool HEAD'         'git pointed at another repo'   # difftool (exec) NOT matched by 8f -> redirects
@@ -192,7 +192,7 @@ expect_allow 'grep -o foo src | sort | uniq -c'              # grep -o likewise
 expect_gate  'git grep -O foo -- src'                        # git grep -O pager/exec (Rule 8e)
 expect_gate  'git grep --open-files-in-pager foo'            # long form
 expect_gate  'git -C /x grep -Oevil foo -- src'              # Rule 8e now catches the -C form (grep is the 3rd token, not 2nd)
-expect_allow 'git grep -n foo origin/develop -- rts/invoice/models.py'  # read-mode git grep stays silent
+expect_allow 'git grep -n foo origin/develop -- pkg/models.py'  # read-mode git grep stays silent
 expect_allow_json 'git -C /x grep -n "DashboardFooterSettings\|LocaleSwitcher" develop -- src'  # read-only git -C grep auto-approved (Rule 8j)
 expect_allow_json 'git -C /x grep -n foo develop -- src'     # plain read-only git -C grep too
 expect_block 'git diff --name-only -z | xargs -0 npx prettier --log-level warn --write src/x.ts' 'directly'  # Rule 2c
@@ -284,25 +284,41 @@ expect_allow 'git branch'                                # plain listing not red
 expect_gate  'git branch -D oldbranch'                   # mutating branch still gates (Rule 8), not redirected
 expect_allow 'git show f491d6c --stat --date=short'      # control: plain git show, no pager flag
 
-echo "== Rules 12/13/14 — gh read redirects (local git / Read / gh pr view; graphql & flag-order) =="
+echo "== Rules 12/13/14 — gh reads (local-git redirect; gh api/graphql read-allow; flag-order) =="
 expect_block 'gh pr diff 42'                            'reading repo content through gh'
 expect_block 'gh api repos/o/r/commits/abc123'          'reading repo content through gh'
+expect_block 'gh api "repos/o/r/commits/abc123"'        'reading repo content through gh'   # Rule 12 now matches the QUOTED form too ($dequoted)
 expect_block 'gh api repos/o/r/compare/main...feature'  'reading repo content through gh'
 expect_block 'gh api repos/o/r/contents/sections/x.yml?ref=main' 'reading repo content through gh'
 expect_block "gh api repos/o/r/pulls/486/files --paginate --jq '.[]'" 'reading repo content through gh'  # Rule 12 PR files
-expect_block 'gh api repos/o/r/pulls/42/comments'       'reading PR comments'   # still routes to Rule 13, not 12
-expect_allow "gh api repos/o/r/pulls/584/comments/4514364623/replies -f body='Not changing this.'"  # Rule 13 must NOT catch a reply WRITE (-f makes it POST)
-expect_allow 'gh api repos/o/r/pulls/42/comments -X POST -f body=hi'  # explicit POST to comments -> write, not flagged
+# Rule 13 — read-only gh api REST GET is a positive ALLOW (was a redirect to gh pr view, which never
+# carried the inline diff-line comments). Quoted URL is the real incident shape (dodged the old redirect).
+expect_allow_json 'gh api repos/o/r/pulls/42/comments'                               # inline review comments (REST read)
+expect_allow_json 'gh api --paginate "repos/{owner}/{repo}/pulls/585/comments"'      # the incident: quoted URL, {owner} placeholder
+expect_allow_json "gh api \"repos/o/r/pulls/42/reviews\" --jq '.[].state'"           # reviews read, --jq built-in
+expect_allow_json "gh api repos/o/r/pulls/42/reviews | jq '.[].state'"               # piped to jq (leaders gh+jq only)
+expect_allow_json 'gh api repos/o/r/issues/42/comments'                              # issue comments read
+expect_allow_json 'gh api user'                                                      # general GitHub read
+expect_allow "gh api repos/o/r/pulls/584/comments/4514364623/replies -f body='Not changing this.'"  # reply WRITE (-f POST): excluded -> prompts
+expect_allow 'gh api repos/o/r/pulls/42/comments -X POST -f body=hi'  # explicit POST -> write, excluded -> prompts
+expect_allow 'gh api repos/o/r/issues/comments/123 -X DELETE'        # DELETE -> write, excluded -> prompts
+expect_allow 'gh api "repos/o/r/pulls/$n/comments"'                  # shell var $n in the path: excluded (inline the number) -> prompts
+expect_allow 'gh api repos/o/r/pulls/42/comments > out.json'         # output redirect: excluded -> prompts
+expect_allow 'gh api repos/o/r/pulls/42/comments && rm -rf x'        # chained non-gh/jq leader: excluded -> no blanket allow
 expect_block 'gh --repo o/r pr view 196 --json title'   'flag placed before the subcommand'
-expect_allow "gh api graphql -f query='{ reviewThreads }'"  # inline threads: no read-only equivalent, must NOT be flagged
+# Rule 13b — read-only gh api graphql (no `mutation` keyword) is a positive ALLOW; a mutation prompts.
+expect_allow_json "gh api graphql -f query='{ reviewThreads }'"  # inline threads read: no gh pr view / REST equivalent
+expect_allow_json "gh api graphql -f query='query{repository(owner:\"acme\",name:\"web-app\"){pullRequest(number:42){reviewThreads(first:50){nodes{isResolved path}}}}}'"  # the incident shape
+expect_allow_json "gh api graphql -f query='query(\$owner:String!){repository(owner:\$owner,name:\"r\"){id}}' -F owner=acme"  # single-quoted GraphQL \$vars + -F input: still a read
+expect_allow "gh api graphql -f query='mutation{resolveReviewThread(input:{threadId:\"x\"}){thread{id}}}'"  # mutation keyword -> excluded -> prompts
 expect_block 'git diff $(git merge-base origin/develop HEAD) --stat -- src'  'range syntax'  # Rule 12b: $(merge-base) -> A...B
 expect_allow 'git diff origin/develop...HEAD --stat -- src'   # the ... form passes (no command substitution)
 expect_allow 'gh pr view 42 --comments'                 # correct form: read-only, whitelistable
 expect_allow 'gh pr view 42 --json state,mergedAt'      # PR metadata via gh pr view is fine
 expect_allow 'gh pr view 196 --repo o/r --json title'  # Rule 14's target: --repo after the subcommand
-expect_block 'gh pr view 215 --repo $(cd /x/example-api-docs && gh repo view --json nameWithOwner -q .nameWithOwner) --json title,body'  'command substitution'  # Rule 14b: --repo $(...) -> literal
+expect_block 'gh pr view 215 --repo $(cd /x/api-docs && gh repo view --json nameWithOwner -q .nameWithOwner) --json title,body'  'command substitution'  # Rule 14b: --repo $(...) -> literal
 expect_block 'gh pr view 215 --repo=$(gh repo view --json nameWithOwner)'  'command substitution'  # Rule 14b: --repo=$(...) form too
-expect_allow 'gh pr view 215 --repo foremanmining/example-api-docs --json title,body'  # the literal form Rule 14b steers toward
+expect_allow 'gh pr view 215 --repo acme/api-docs --json title,body'  # the literal form Rule 14b steers toward
 expect_allow 'git show abc123 --stat'                   # the git form Rule 12 steers toward
 
 echo "== heredoc bodies are data, not shell (no false overreach) =="

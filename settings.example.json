@@ -20,7 +20,6 @@
       "Bash(git ls-tree *)",
       "Bash(git check-ignore *)",
       "Bash(gh pr view *)",
-      "Bash(gh pr diff *)",
       "Bash(gh pr list *)",
       "Bash(gh pr checks *)",
       "Bash(gh pr status *)",

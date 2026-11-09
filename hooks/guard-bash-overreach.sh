@@ -685,9 +685,13 @@ fi
 # `…/contents/<path>` all fetch over the API and prompt (gh api can't be safely
 # allowlisted — any path takes a trailing -X/-f that writes). It's all in the local
 # checkout: diffs/commits via plain git, a file's content via the Read tool. Assumes
-# the repo is checked out locally; one `git fetch` covers a missing ref.
+# the repo is checked out locally; one `git fetch` covers a missing ref. The `gh api`
+# branch matches $dequoted (NOT $scan) so a QUOTED URL — `gh api "repos/.../commits/<sha>"`,
+# the usual spelling for a path with a `?query` — is caught too; $scan would delete the
+# quoted span and miss it, redirecting the unquoted form but letting the quoted one reach
+# the read-allow below (Rule 13) and be auto-approved over the API, which this prevents.
 if printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+pr[[:space:]]+diff([[:space:]]|$)' \
-   || printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+api[[:space:]][^;|&]*(commits/|compare/|contents/|pulls/[^;|&]*files)'; then
+   || printf '%s' "$dequoted" | grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+api[[:space:]][^;|&]*(commits/|compare/|contents/|pulls/[^;|&]*files)'; then
   echo "Overreach: reading repo content through gh (gh pr diff, or gh api …/commits|compare|contents|pulls/<n>/files). Those hit the API and prompt; it's all in your local checkout. For a diff or commit, use plain git — 'git show <sha>', 'git log <a>..<b>', 'git diff <a>...<b>' (read-only, whitelist-passing; 'git fetch' first if the ref is missing). For a PR's changed files, fetch and diff locally — 'git fetch origin pull/<n>/head' then 'git diff <base>...FETCH_HEAD -- <paths>' (a sibling repo: 'git -C <path> …', now allowlisted). For a file's content, Read it from the checkout, or 'git show <ref>:<path>' for a specific ref." >&2
   exit 2
 fi
@@ -702,22 +706,50 @@ if printf '%s' "$cmd" | grep -Eq '\$\(git[[:space:]]+merge-base'; then
   exit 2
 fi
 
-# Rule 13 — reading PR conversation/review comments via `gh api …/pulls/<n>/comments`
-# (REST). Use `gh pr view <n> --comments` / `--json comments,reviews` (read-only and
-# whitelistable) instead. EXCEPTION: inline diff-line review threads are not a
-# `gh pr view` field and genuinely need `gh api graphql … reviewThreads`, which has
-# no read-only equivalent and correctly prompts — that call is explicitly NOT flagged.
-# Also NOT flagged: a WRITE to the comments endpoint (replying to a review comment,
-# `gh api …/comments/<id>/replies -f body=…`). A field flag (-f/-F/--field/--raw-field/
-# --input) makes `gh api` a POST, and an explicit -X/--method POST/PUT/PATCH/DELETE is a
-# write too — redirecting a reply to a read command would be nonsense. There is no read-only
-# equivalent for posting a reply, so it correctly prompts (or goes via graphql, also excluded).
-if printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+api[[:space:]]' \
-   && printf '%s' "$scan" | grep -Eq 'pulls/[^;|&]*comments' \
-   && ! printf '%s' "$scan" | grep -Eq 'graphql' \
-   && ! printf '%s' "$scan" | grep -Eq '(^|[[:space:]])(-f|-F|--field|--raw-field|--input)([[:space:]=]|$)|(-X|--method)[[:space:]]+(POST|PUT|PATCH|DELETE)'; then
-  echo "Overreach: reading PR comments via 'gh api …/pulls/<n>/comments'. Use 'gh pr view <n> --comments' or 'gh pr view <n> --json comments,reviews' — read-only and whitelistable. (Inline diff-line review threads are the exception: they need 'gh api graphql … reviewThreads', which has no read-only equivalent and will correctly prompt — don't reroute that one.)" >&2
-  exit 2
+# Rule 13 — read-only `gh api` REST GET (positive allow). Reading GitHub over the API —
+# PR review comments (`pulls/<n>/comments`, the inline diff-line threads `gh pr view` can't
+# return), reviews, issue comments, PR/issue metadata — is normal activity, no different from
+# the already-allowlisted `gh pr view`/`list`/`checks`. But `gh api <path>` has no safe blanket
+# allowlist entry: any path takes a write flag (`-f`/`-F`/`--field`/`--raw-field`/`--input` make
+# it a POST; `-X/--method POST|PUT|PATCH|DELETE` forces a write), so a settings `Bash(gh api *)`
+# would auto-approve a comment POST or a label DELETE. Allow the READ shape here instead, failing
+# to a prompt on anything that could write. gh api always talks to the authenticated GitHub host
+# (no arbitrary-host exfil) and a GET carries no body, so a literal-path read with no write flag
+# and no mutating method is exfil- and mutation-safe. Conditions (ALL): the call is `gh api` and
+# NOT graphql (that is Rule 13b); every segment leader is gh or jq, so a chained mutation can't
+# ride the allow; no command substitution; no output redirection; no shell variable (a `$n` PR
+# number must be inlined — CC gates `$` anyway); no write flag; no mutating method. The
+# commits/compare/contents/<n>/files reads are already redirected to local git by Rule 12 (which
+# runs first and now matches the quoted form too), so they never reach here.
+if printf '%s' "$dequoted" | grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+api([[:space:]]|$)' \
+   && ! printf '%s' "$dequoted" | grep -Eq '(^|[[:space:]])graphql([[:space:]]|$)' \
+   && ! printf '%s\n' "$leaders" | grep -qvxE 'gh|jq' \
+   && ! printf '%s' "$cmd" | grep -Eq '\$\(|`' \
+   && ! printf '%s' "$scan" | grep -q '>' \
+   && ! printf '%s' "$dequoted" | grep -q '[$]' \
+   && ! printf '%s' "$cmd" | grep -Eq '(^|[[:space:]])(-f|-F|--field|--raw-field|--input)([[:space:]=]|$)|(-X|--method)[[:space:]]+(POST|PUT|PATCH|DELETE)'; then
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"read-only gh api REST GET (no write flag, no mutating method, literal path, gh/jq only) — reading GitHub, same as the allowlisted gh pr view. A field flag (-f/-F/--field/--raw-field/--input) or -X POST|PUT|PATCH|DELETE makes it a write and falls through to a prompt."}}'
+  exit 0
+fi
+
+# Rule 13b — read-only `gh api graphql` query (positive allow). Inline review-thread resolution
+# state (`reviewThreads{ isResolved … }`) has no REST or `gh pr view` equivalent and is exactly
+# what a PR-comment sweep needs. graphql ALWAYS passes the document via `-f query=` (a field flag),
+# so Rule 13's "no field flag" test can't clear it; the read/write discriminator is instead the
+# GraphQL operation type. A mutation MUST carry the top-level `mutation` keyword (an anonymous
+# `{ … }` or `query { … }` is a read; there is no other way to mutate), so allow when the command
+# carries no `mutation` keyword — a mutation (resolveReviewThread, addComment, mergePullRequest…)
+# keeps the keyword and falls through to a prompt. Same chaining / substitution / redirect guards
+# as Rule 13. The query is single-quoted, so its GraphQL `$owner`/`$number` variables are literal,
+# not shell expansion (hence no `$` exclusion here, unlike Rule 13's REST path).
+if printf '%s' "$dequoted" | grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+api[[:space:]]+graphql([[:space:]]|$)' \
+   && ! printf '%s\n' "$leaders" | grep -qvxE 'gh|jq' \
+   && ! printf '%s' "$cmd" | grep -Eq '\$\(|`' \
+   && ! printf '%s' "$scan" | grep -q '>' \
+   && ! printf '%s' "$cmd" | grep -Eiq '(^|[^a-zA-Z])mutation([^a-zA-Z]|$)' \
+   && ! printf '%s' "$cmd" | grep -Eq '(-X|--method)[[:space:]]+(POST|PUT|PATCH|DELETE)'; then
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"read-only gh api graphql query (no mutation keyword, gh/jq only) — e.g. reviewThreads{isResolved …}, which has no gh pr view / REST equivalent. A GraphQL mutation carries the top-level mutation keyword and falls through to a prompt."}}'
+  exit 0
 fi
 
 # Rule 14 — gh's global `--repo`/`-R` placed BEFORE the subcommand
