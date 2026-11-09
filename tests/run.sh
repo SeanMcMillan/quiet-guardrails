@@ -122,6 +122,7 @@ expect_allow_json 'git -C /x show 9764edc'
 expect_allow_json 'git -C /x status --short'
 expect_allow_json 'git -C /x diff HEAD~1'
 expect_allow_json 'git -C /x rev-list --left-right --count HEAD...origin/develop'  # rev-list (read-only commit listing) auto-approved
+expect_allow_json 'git -C /x ls-remote --heads origin rts-1437/nav-cutover'  # ls-remote (read-only remote ref query) auto-approved
 expect_allow_json 'git -C /x fetch origin pull/486/head'  # fetch (non-destructive) auto-approved
 expect_allow_json 'git -C /x fetch'            # bare fetch too
 expect_block 'git -C /x difftool HEAD'         'git pointed at another repo'   # difftool (exec) NOT matched by 8f -> redirects
@@ -190,7 +191,10 @@ expect_allow 'rg -o foo src | sort | uniq -c | sort -n'      # rg -o must NOT tr
 expect_allow 'grep -o foo src | sort | uniq -c'              # grep -o likewise
 expect_gate  'git grep -O foo -- src'                        # git grep -O pager/exec (Rule 8e)
 expect_gate  'git grep --open-files-in-pager foo'            # long form
+expect_gate  'git -C /x grep -Oevil foo -- src'              # Rule 8e now catches the -C form (grep is the 3rd token, not 2nd)
 expect_allow 'git grep -n foo origin/develop -- rts/invoice/models.py'  # read-mode git grep stays silent
+expect_allow_json 'git -C /x grep -n "DashboardFooterSettings\|LocaleSwitcher" develop -- src'  # read-only git -C grep auto-approved (Rule 8j)
+expect_allow_json 'git -C /x grep -n foo develop -- src'     # plain read-only git -C grep too
 expect_block 'git diff --name-only -z | xargs -0 npx prettier --log-level warn --write src/x.ts' 'directly'  # Rule 2c
 expect_allow 'npx prettier --log-level warn --write src/x.ts'  # direct form passes
 expect_block 'grep -nE "^#{1,3} " docs/notes/CLEANUP-NOTES.md' 'numeric brace interval'  # Rule 2d: the incident, {1,3} in ERE
@@ -287,6 +291,8 @@ expect_block 'gh api repos/o/r/compare/main...feature'  'reading repo content th
 expect_block 'gh api repos/o/r/contents/sections/x.yml?ref=main' 'reading repo content through gh'
 expect_block "gh api repos/o/r/pulls/486/files --paginate --jq '.[]'" 'reading repo content through gh'  # Rule 12 PR files
 expect_block 'gh api repos/o/r/pulls/42/comments'       'reading PR comments'   # still routes to Rule 13, not 12
+expect_allow "gh api repos/o/r/pulls/584/comments/4514364623/replies -f body='Not changing this.'"  # Rule 13 must NOT catch a reply WRITE (-f makes it POST)
+expect_allow 'gh api repos/o/r/pulls/42/comments -X POST -f body=hi'  # explicit POST to comments -> write, not flagged
 expect_block 'gh --repo o/r pr view 196 --json title'   'flag placed before the subcommand'
 expect_allow "gh api graphql -f query='{ reviewThreads }'"  # inline threads: no read-only equivalent, must NOT be flagged
 expect_block 'git diff $(git merge-base origin/develop HEAD) --stat -- src'  'range syntax'  # Rule 12b: $(merge-base) -> A...B

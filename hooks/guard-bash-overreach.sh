@@ -212,14 +212,17 @@ fi
 
 # Rule 8e — git grep's exec vector (`-O` / `--open-files-in-pager`). `git grep` is
 # allowlisted (Bash(git grep *)) as a read-only search; -O opens each match in a pager,
-# which runs an arbitrary command. Bound to the `git grep` segment (leader `git`,
-# subcommand `grep`) so a `curl -O` / `wget -O` elsewhere in the pipe doesn't trip it.
+# which runs an arbitrary command. Bound to a segment whose leader is `git` and which has
+# a `grep` subcommand token (so a `curl -O` / `wget -O` in another pipe segment doesn't trip
+# it) — matching `grep` as any token after `git`, NOT just the 2nd, so the `git -C <path>
+# grep -O` form (where `-C` is the 2nd token) is caught too, not only plain `git grep -O`.
 # Read-mode git grep stays silent.
 if printf '%s' "$dequoted" | awk '
     { s=$0; gsub(/\|\||&&/,"\n",s); gsub(/[|;()]/,"\n",s); print s }
   ' | awk '
-    { a=""; b=""; for (i=1; i<=NF; i++) if ($i!="") { if (a=="") a=$i; else { b=$i; break } }
-      if (a=="git" && b=="grep") for (i=1; i<=NF; i++) if ($i ~ /^-O/ || $i ~ /^--open-files-in-pager/) found=1 }
+    { a=""; for (i=1; i<=NF; i++) if ($i!="") { a=$i; break }
+      if (a=="git") { g=0; for (i=2; i<=NF; i++) if ($i=="grep") g=1
+        if (g) for (i=2; i<=NF; i++) if ($i ~ /^-O/ || $i ~ /^--open-files-in-pager/) found=1 } }
     END { exit found?0:1 }
   '; then
   printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"git grep -O / --open-files-in-pager opens matches in a pager, which runs an arbitrary command. git grep is allowlisted as a read-only search, so this hook forces a confirmation on the pager/exec mode."}}'
@@ -377,8 +380,21 @@ fi
 # can run on a read) — fine for local checkouts you control, and git's default
 # safe.directory refuses repos owned by another user. `fetch` is the one non-read
 # (updates remote-tracking refs, non-destructive), included for the cross-repo PR-diff flow.
-if printf '%s' "$dequoted" | grep -Eq '(^|[^[:alnum:]_])git[[:space:]]+-C[[:space:]]+[^[:space:]]+[[:space:]]+(show|log|diff|status|for-each-ref|ls-tree|rev-list|fetch)([[:space:]]|$)'; then
-  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"read-only git -C <path> <show/log/diff/status/for-each-ref/ls-tree/rev-list/fetch> — the sanctioned cross-repo read, auto-approved. An injected global -c/--exec-path between path and subcommand would not match this and still prompts."}}'
+if printf '%s' "$dequoted" | grep -Eq '(^|[^[:alnum:]_])git[[:space:]]+-C[[:space:]]+[^[:space:]]+[[:space:]]+(show|log|diff|status|for-each-ref|ls-tree|ls-remote|rev-list|fetch)([[:space:]]|$)'; then
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"read-only git -C <path> <show/log/diff/status/for-each-ref/ls-tree/ls-remote/rev-list/fetch> — the sanctioned cross-repo read, auto-approved. An injected global -c/--exec-path between path and subcommand would not match this and still prompts."}}'
+  exit 0
+fi
+
+# Rule 8j — read-only `git -C <path> grep` auto-approve. grep is NOT in Rule 8f's always-read set
+# because git grep has an exec vector (-O / --open-files-in-pager opens matches in a pager = an
+# arbitrary command), gated by Rule 8e ABOVE (now incl. the -C form). Allow the read-only search
+# (of the working tree or a ref) here, but EXCLUDE -O as a self-contained second guard — so even if
+# 8e ever missed it, this never auto-approves the pager/exec mode. Same path/injection safety as 8f:
+# grep right after the single path token, so an injected global -c/--exec-path doesn't match. (A
+# search PATTERN that literally contains ' -O ' will fail the exclusion and prompt — rare, safe.)
+if printf '%s' "$dequoted" | grep -Eq '(^|[^[:alnum:]_])git[[:space:]]+-C[[:space:]]+[^[:space:]]+[[:space:]]+grep([[:space:]]|$)' \
+   && ! printf '%s' "$dequoted" | grep -Eq '(^|[[:space:]])(-O|--open-files-in-pager)'; then
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"read-only git -C <path> grep — a cross-repo search of tracked content or a ref. The -O/--open-files-in-pager exec vector is gated by Rule 8e and excluded here, so only the read-only search auto-approves."}}'
   exit 0
 fi
 
@@ -691,9 +707,15 @@ fi
 # whitelistable) instead. EXCEPTION: inline diff-line review threads are not a
 # `gh pr view` field and genuinely need `gh api graphql … reviewThreads`, which has
 # no read-only equivalent and correctly prompts — that call is explicitly NOT flagged.
+# Also NOT flagged: a WRITE to the comments endpoint (replying to a review comment,
+# `gh api …/comments/<id>/replies -f body=…`). A field flag (-f/-F/--field/--raw-field/
+# --input) makes `gh api` a POST, and an explicit -X/--method POST/PUT/PATCH/DELETE is a
+# write too — redirecting a reply to a read command would be nonsense. There is no read-only
+# equivalent for posting a reply, so it correctly prompts (or goes via graphql, also excluded).
 if printf '%s' "$scan" | grep -Eq '(^|[^[:alnum:]_])gh[[:space:]]+api[[:space:]]' \
    && printf '%s' "$scan" | grep -Eq 'pulls/[^;|&]*comments' \
-   && ! printf '%s' "$scan" | grep -Eq 'graphql'; then
+   && ! printf '%s' "$scan" | grep -Eq 'graphql' \
+   && ! printf '%s' "$scan" | grep -Eq '(^|[[:space:]])(-f|-F|--field|--raw-field|--input)([[:space:]=]|$)|(-X|--method)[[:space:]]+(POST|PUT|PATCH|DELETE)'; then
   echo "Overreach: reading PR comments via 'gh api …/pulls/<n>/comments'. Use 'gh pr view <n> --comments' or 'gh pr view <n> --json comments,reviews' — read-only and whitelistable. (Inline diff-line review threads are the exception: they need 'gh api graphql … reviewThreads', which has no read-only equivalent and will correctly prompt — don't reroute that one.)" >&2
   exit 2
 fi
