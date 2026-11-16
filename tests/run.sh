@@ -198,6 +198,17 @@ expect_gate  'git grep -O foo -- src'                        # git grep -O pager
 expect_gate  'git grep --open-files-in-pager foo'            # long form
 expect_gate  'git -C /x grep -Oevil foo -- src'              # Rule 8e now catches the -C form (grep is the 3rd token, not 2nd)
 expect_allow 'git grep -n foo origin/develop -- pkg/models.py'  # read-mode git grep stays silent
+expect_gate  'rg --pre ./decode.sh foo src'                   # rg --pre exec vector (Rule 8k ask)
+expect_gate  "rg --pre='sh -c evil' foo src"                  # = form, quoted value
+expect_gate  'npm run build | rg --pre cat error'             # rg segment after a producer still caught
+expect_allow "rg --pre-glob '*.gz' foo src"                   # --pre-glob alone runs nothing
+expect_allow 'rg --no-pre foo src'                            # --no-pre disables it
+expect_gate  'uniq data.txt out.txt'                          # uniq's 2nd operand is an output file (Rule 8l ask)
+expect_gate  'sort data.txt | uniq - out.txt'                 # stdin '-' counts as the input operand
+expect_gate  'uniq -c -- data.txt out.txt'                    # operands after -- still counted
+expect_allow 'uniq -c data.txt'                               # one operand: read
+expect_allow 'uniq -f 1 data.txt'                             # -f's value isn't an operand
+expect_allow 'uniq data.txt 2>/dev/null'                      # a redirect isn't an operand
 expect_allow_json 'git -C /x grep -n "DashboardFooterSettings\|LocaleSwitcher" develop -- src'  # read-only git -C grep auto-approved (Rule 8j)
 expect_allow_json 'git -C /x grep -n foo develop -- src'     # plain read-only git -C grep too
 expect_block 'git diff --name-only -z | xargs -0 npx prettier --log-level warn --write src/x.ts' 'directly'  # Rule 2c
@@ -227,7 +238,7 @@ expect_allow 'npx prettier --check src/x.ts' "$HOME"                           #
 
 echo "== Rule 10c — brace expansion in a coverage glob redirected to brace-free form =="
 expect_block 'npm run test:coverage -- --findRelatedTests "src/actions/auth.actions.ts" --collectCoverageFrom="src/{actions/auth.actions,proxy}.ts?(x)" --collectCoverageFrom="src/app/[locale]/[product]/**/*.{ts,tsx}"' 'brace expansion'  # the real incident
-expect_block 'npx jest --collectCoverageFrom="src/**/*.{ts,tsx}" --findRelatedTests src/x.ts' 'brace expansion'  # jest + {ts,tsx}
+expect_block 'npx jest --collectCoverageFrom="src/**/*.{ts,tsx}" --findRelatedTests src/x.ts' 'brace expansion' "$HOME"  # jest + {ts,tsx}; $HOME so Rule 10 (raw jest) can't fire first
 expect_allow 'npm run test:coverage -- --findRelatedTests "src/app/[locale]/page.tsx"'  # no braces, quoted bracket path is fine
 expect_allow 'npm run test:coverage -- --collectCoverageFrom="src/{x}.ts"'              # single {x}, no comma -> not an expansion
 expect_allow 'mkdir -p "src/foo/{a,b,c}"'                                                # braces outside a coverage/jest context -> not force-rewritten

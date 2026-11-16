@@ -207,8 +207,7 @@ firstleader="$(printf '%s\n' "$leaders" | sed -n '1p')"
 # segment — split on pipe/;/&&/subshell, and a segment gates only when its leader is
 # `sort` and it carries -o/--output. This is essential: a `rg -o`/`grep -o` earlier
 # in the SAME pipe (`rg -o … | sort | uniq -c | sort -n`) must NOT trip it — the -o
-# there is the search's, not sort's. (uniq's write is a bare 2nd operand with no
-# flag — not reliably detectable without parsing its value flags — left to CC.)
+# there is the search's, not sort's. (uniq's write has no flag — see Rule 8l.)
 if printf '%s' "$dequoted" | awk '
     { s=$0; gsub(/\|\||&&/,"\n",s); gsub(/[|;()]/,"\n",s); print s }
   ' | awk '
@@ -236,6 +235,45 @@ if printf '%s' "$dequoted" | awk '
     END { exit found?0:1 }
   '; then
   printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"git grep -O / --open-files-in-pager opens matches in a pager, which runs an arbitrary command. git grep is allowlisted as a read-only search, so this hook forces a confirmation on the pager/exec mode."}}'
+  exit 0
+fi
+
+# Rule 8k — rg's exec vector (`--pre CMD` / `--pre=CMD`). `rg` is allowlisted (Bash(rg *))
+# as a read-only search; --pre runs CMD on every searched file. Segment-bound like 8d, so
+# a `--pre` belonging to another command in the pipe doesn't trip it. `--pre-glob` only
+# narrows which files --pre applies to and `--no-pre` disables it — neither runs anything.
+if printf '%s' "$dequoted" | awk '
+    { s=$0; gsub(/\|\||&&/,"\n",s); gsub(/[|;()]/,"\n",s); print s }
+  ' | awk '
+    { lead=""; for (i=1; i<=NF; i++) if ($i!="") { lead=$i; break }
+      if (lead=="rg") for (i=2; i<=NF; i++) if ($i=="--pre" || $i ~ /^--pre=/) found=1 }
+    END { exit found?0:1 }
+  '; then
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"rg --pre runs a command on every searched file. rg is allowlisted as a read-only search, so this hook forces a confirmation on the exec mode."}}'
+  exit 0
+fi
+
+# Rule 8l — uniq's write vector: a second operand is the OUTPUT file (`uniq in out`).
+# `uniq` is allowlisted (Bash(uniq *)) for tallies, which take zero or one operand. Counts
+# operands in the uniq segment, skipping the value after -f/-s/-w and any redirection
+# (`2>/dev/null`, `> f`) — a redirect is the shell's write, not uniq's, and CC gates it.
+# An attached or unusual value flag over-counts, which only asks: fail-safe.
+if printf '%s' "$dequoted" | awk '
+    { s=$0; gsub(/\|\||&&/,"\n",s); gsub(/[|;()]/,"\n",s); print s }
+  ' | awk '
+    { lead=""; for (i=1; i<=NF; i++) if ($i!="") { lead=$i; break }
+      if (lead=="uniq") { n=0; endopts=0
+        for (i=2; i<=NF; i++) {
+          if ($i ~ /^[0-9&]*>>?$/ || $i ~ /^[0-9]*<$/) { i++; continue }
+          if ($i ~ /^[0-9&]*[<>]/) continue
+          if (!endopts && $i=="--") { endopts=1; continue }
+          if (!endopts && ($i=="-f" || $i=="-s" || $i=="-w")) { i++; continue }
+          if (!endopts && $i ~ /^-./) continue
+          n++ }
+        if (n>=2) found=1 } }
+    END { exit found?0:1 }
+  '; then
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"uniq with two operands writes the second one as its output file. uniq is allowlisted as a read tool for prompt-free tallies, so this hook forces a confirmation on the write mode."}}'
   exit 0
 fi
 
