@@ -24,6 +24,8 @@
       "Bash(gh pr checks *)",
       "Bash(gh pr status *)",
       "Bash(npm view *)",
+      "Bash(npm outdated)",
+      "Bash(npm outdated *)",
       "Bash(gh auth status)"
     ]
   },

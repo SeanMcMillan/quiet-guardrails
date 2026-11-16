@@ -158,10 +158,20 @@ case "$scan" in
     ;;
 esac
 
-# Rule 1 — parsing JSON with an interpreter. Prefer jq.
+# Rule 1 — parsing JSON with an interpreter. Prefer jq. Keyed on an actual PARSE-CODE
+# signal (`json.load`/`json.dump`/`import json` / `JSON.parse` / `fromjson`), NOT a bare
+# `.json` mention: real inline parsing always carries one of those, while merely touching
+# a json file — a committed script with a json arg (`python munge.py data.json`), a `.json`
+# env-var path (`AUDIT_JSON=…/x.json python …`), a config flag — carries none, and is
+# program execution the guard shouldn't police (jq can't replace running a script). EXCEPT
+# a Django management invocation (`manage.py`): an inline `shell -c "…json.loads(…)…"` does
+# carry the code signal but is building ORM/JSONField data, not extracting — jq can't write
+# to the ORM — so `manage.py` is excluded. A genuine `python -c "import json;
+# json.load(open('x.json'))"` with no manage.py still redirects to jq.
 if printf '%s' "$cmd" | grep -Eq '(^|[^[:alnum:]_])python3?([^[:alnum:]_]|$)' \
    || printf '%s' "$cmd" | grep -Eq 'node[[:space:]]+(-e|-p|--eval|--input-type)'; then
-  if printf '%s' "$cmd" | grep -Eiq '\.jsonl?([^[:alnum:]]|$)|json\.load|json\.dump|JSON\.parse|fromjson|import[[:space:]]+json'; then
+  if printf '%s' "$cmd" | grep -Eiq 'json\.load|json\.dump|JSON\.parse|fromjson|import[[:space:]]+json' \
+     && ! printf '%s' "$cmd" | grep -Eq '(^|[^[:alnum:]_])manage\.py([^[:alnum:]_]|$)'; then
     echo "Overreach: parsing JSON with an interpreter. Use jq (auto-approved) instead of python/node." >&2
     exit 2
   fi

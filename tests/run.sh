@@ -129,7 +129,12 @@ expect_block 'git -C /x difftool HEAD'         'git pointed at another repo'   #
 expect_block 'git -C /x --exec-path=/evil log' 'git pointed at another repo'   # injected global flag between path and sub -> NOT auto-approved
 expect_block 'find src/[locale] -name "*.tsx"' 'glob character'
 expect_block 'for f in a b; do echo $f; done'  'shell loop'
-expect_block 'python3 munge.py data.json'      'parsing JSON'
+expect_allow 'python3 munge.py data.json'      # committed script with a json ARG: a program run, no parse-code signal -> not Rule 1's business
+expect_block "python3 -c \"import json; print(json.load(open('x.json')))\"" 'parsing JSON'  # inline json parse (import json + json.load), no manage.py -> redirects to jq
+expect_block "node -e \"console.log(JSON.parse(fs.readFileSync('x.json')))\"" 'parsing JSON'  # node inline JSON.parse -> redirects to jq
+expect_allow 'FIX=data.json python3 report.py'  # a .json env-var path on a program run: no parse-code signal -> not triggered
+expect_allow 'docker exec -i -e AUDIT_JSON=/tmp/audit.json app python manage.py shell < /scratch/ingest.py'  # Django data-faking: .json is an env-var path, script ingests it into the ORM -> manage.py excludes Rule 1
+expect_allow "docker exec app python manage.py shell -c \"from app.models import M; print(M.objects.create(payload=json.loads(raw)))\""  # inline Django ORM build from json.loads -> manage.py excludes Rule 1
 expect_block "node -e \"const {spawnSync}=require('child_process'); spawnSync('tsc')\"" 'in the shell'  # Rule 1b orchestration
 expect_block "python3 -c \"import subprocess; subprocess.run(['tsc'])\""               'in the shell'
 expect_allow "node -e \"console.log(1 + 1)\""                                          # plain compute, no child process
